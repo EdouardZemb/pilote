@@ -199,6 +199,22 @@ if ($h -ne [IntPtr]::Zero -and $he -ne [IntPtr]::Zero) {
     if ($ok) { [void] [W]::Taper('Bonjour'); Start-Sleep -Milliseconds 400; $lu = [W]::Texte($edit) }
     Dire ("methode-$m") ('edge-devant={0} blocnotes-devant={1} lu=[{2}]' -f $avant, $ok, $lu)
   }
+  # Un processus neuf, sans frappe envoyee, comme un appel de pilote
+  foreach ($m in @('nu', 'souris', 'alt-intercale', 'nu', 'souris')) {
+    [void] [W]::Methode('alt-intercale', $he)
+    Start-Sleep -Milliseconds 300
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'premier-plan.ps1') -Methode $m -Fenetre ([long] $h)
+    Dire ("frais-$m-devant") ([W]::GetForegroundWindow() -eq $h)
+  }
+  # Le mode menu : la methode appliquee quand la cible a deja le premier plan
+  foreach ($m in @('alt', 'alt-intercale', 'souris', 'alt')) {
+    [void] [W]::Methode('souris', $h)
+    [W]::Vider($edit)
+    $ok = [W]::Methode($m, $h)
+    [void] [W]::Taper('Bonjour'); Start-Sleep -Milliseconds 400
+    Dire ("deja-devant-$m") ('devant={0} lu=[{1}]' -f $ok, [W]::Texte($edit))
+    [void] [W]::Taper([string][char]27); Start-Sleep -Milliseconds 200
+  }
   # Chromium : le champ garde-t-il le focus apres chaque methode ?
   if ($champ) {
     foreach ($m in @('alt', 'souris', 'alt-intercale')) {
