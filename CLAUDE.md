@@ -4,15 +4,15 @@
 
 Piloter une application de bureau de Windows depuis une session Claude : le clavier, l'automatisation de Windows et la capture de la seule fenêtre visée
 
-*Une phrase de plus si le nom et la description ne suffisent pas : pour qui, et pourquoi.*
+Pour les sessions de Claude Code du poste d'Edouard : faire les essais installés et les contrôles d'accessibilité de ses projets sans lui, au clavier et par ce que lit un lecteur d'écran.
 
 ## État
 
-*Où en est le projet : l'étape en cours, la dernière chose faite, la prochaine. À tenir à jour à chaque fusion.*
+Né le 2026-11-21 de `modele-projet` v0.14.0. Phase 0 faite : le brief, le cadrage et les ADR 0001 à 0004. Prochaine : l'issue du lot 1 et sa PR de plan.
 
 ## Commandes
 
-*Les commandes à connaître pour travailler : installer, tester, vérifier, lancer. Une commande par ligne, avec ce qu'elle fait.*
+*Aucune avant la première PR d'implémentation.*
 
 ## Ce qui fait foi
 
@@ -28,4 +28,11 @@ Piloter une application de bureau de Windows depuis une session Claude : le clav
 
 Les invariants communs sont dans `docs/modele/methode.md`. Ceux-ci sont propres au projet.
 
-*Les règles que ce projet ne doit jamais enfreindre, chacune avec sa raison en une phrase. Les supprimer une à une quand elles cessent d'être vraies.*
+1. Rien ne se tape hors de la fenêtre visée : le premier plan se vérifie avant chaque touche et chaque caractère. Taper dans la mauvaise fenêtre, même une fois, est un échec (ADR-0002).
+2. Une capture ne prend que la fenêtre visée, jamais l'écran entier, et l'outil n'en garde aucune copie (ADR-0002).
+3. Ce qu'on lit reste dans la fenêtre visée : un focus hors de son arbre de processus ne rend ni nom ni valeur (code 1), et lire n'active rien (ADR-0002).
+4. Une valeur que l'automatisation marque comme mot de passe n'est jamais rendue, et le journal ne garde jamais un texte tapé (ADR-0002).
+5. `nettoyer` n'efface qu'un dossier `pl-<nombre>` de sa liste, directement sous `%TEMP%`, ni jonction ni lien, sur lequel rien ne tourne plus ; il ne tue jamais rien (ADR-0002).
+6. Rien ne configure les refus : aucun fichier qu'une session lirait ne peut élargir ni réduire ce que l'outil refuse (ADR-0002).
+7. Les règles vivent dans le domaine pur, testé sans fenêtre et éprouvé par la mutation ; la couche Windows ne fait que lire et agir (ADR-0003).
+8. Les chemins de données se résolvent dans le seul `src/systeme.rs` ; aucun test ne touche les vrais (ADR-0003).
