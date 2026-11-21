@@ -10,6 +10,7 @@
 //! (`std :: fs`) : la relecture de chaque tâche du domaine les ferme.
 
 pub mod cli;
+pub mod journal;
 pub mod sortie;
 pub mod texte;
 pub mod touches;
