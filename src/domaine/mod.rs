@@ -11,4 +11,5 @@
 
 pub mod cli;
 pub mod sortie;
+pub mod texte;
 pub mod touches;
