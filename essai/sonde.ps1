@@ -25,6 +25,9 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
   [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, StringBuilder l);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, string l);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
   [StructLayout(LayoutKind.Explicit, Size = 40)] public struct INPUT {
     [FieldOffset(0)] public uint type; [FieldOffset(8)] public ushort wVk; [FieldOffset(10)] public ushort wScan;
@@ -45,6 +48,34 @@ public static class W {
     for (int i = 0; i < 10; i++) { if (GetForegroundWindow() == h) return true; Thread.Sleep(100); }
     return GetForegroundWindow() == h;
   }
+  static bool Attendre(IntPtr h) {
+    for (int i = 0; i < 10; i++) { if (GetForegroundWindow() == h) return true; Thread.Sleep(100); }
+    return GetForegroundWindow() == h;
+  }
+  static void Touche(byte vk, bool haut) { keybd_event(vk, 0, haut ? 2u : 0u, UIntPtr.Zero); }
+  public static bool Methode(string m, IntPtr h) {
+    if (IsIconic(h)) ShowWindow(h, 9);
+    if (m == "nu") { SetForegroundWindow(h); }
+    else if (m == "alt") { Touche(0x12, false); Touche(0x12, true); SetForegroundWindow(h); }
+    else if (m == "alt-entoure") { Touche(0x12, false); SetForegroundWindow(h); Touche(0x12, true); }
+    else if (m == "alt-intercale") { Touche(0x12, false); Touche(0x88, false); Touche(0x88, true); Touche(0x12, true); SetForegroundWindow(h); }
+    else if (m == "souris") {
+      INPUT[] t = new INPUT[1]; t[0].type = 0; // INPUT_MOUSE, dx=dy=0, MOUSEEVENTF_MOVE
+      t[0].dwFlags = 0; // champs de MOUSEINPUT a d'autres decalages : voir SourisVide
+      SourisVide(); SetForegroundWindow(h);
+    }
+    return Attendre(h);
+  }
+  [StructLayout(LayoutKind.Explicit, Size = 40)] public struct MINPUT {
+    [FieldOffset(0)] public uint type; [FieldOffset(8)] public int dx; [FieldOffset(12)] public int dy;
+    [FieldOffset(16)] public uint mouseData; [FieldOffset(20)] public uint dwFlags; [FieldOffset(24)] public uint time; [FieldOffset(32)] public IntPtr extra; }
+  [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, MINPUT[] inputs, int size);
+  public static uint SourisVide() {
+    MINPUT[] t = new MINPUT[1]; t[0].type = 0; t[0].dwFlags = 1; // MOUSEEVENTF_MOVE, deplacement nul
+    return SendInput(1, t, Marshal.SizeOf(typeof(MINPUT)));
+  }
+  public static string Texte(IntPtr e) { StringBuilder b = new StringBuilder(4096); SendMessage(e, 0x000D, (IntPtr)4096, b); return b.ToString(); }
+  public static void Vider(IntPtr e) { SendMessage(e, 0x000C, IntPtr.Zero, ""); }
   public static uint Taper(string s) {
     INPUT[] t = new INPUT[s.Length * 2];
     for (int i = 0; i < s.Length; i++) {
@@ -153,6 +184,33 @@ if ($edge) {
     if ($h -ne [IntPtr]::Zero) {
       Dire 'garde-avant-plan-est-edge' ([W]::GetForegroundWindow() -eq $he)
       Dire 'reactiver-blocnotes' ([W]::Activer($h))
+    }
+  }
+}
+# --- Le premier plan sans mode menu : chaque methode, depuis Edge au premier plan
+if ($h -ne [IntPtr]::Zero -and $he -ne [IntPtr]::Zero) {
+  $edit = [W]::FindWindowEx($h, [IntPtr]::Zero, 'Edit', $null)
+  Dire 'blocnotes-edit' $edit
+  foreach ($m in @('alt', 'nu', 'souris', 'alt-entoure', 'alt-intercale', 'souris', 'nu')) {
+    $avant = [W]::Methode('alt-intercale', $he)
+    [W]::Vider($edit)
+    $ok = [W]::Methode($m, $h)
+    $lu = ''
+    if ($ok) { [void] [W]::Taper('Bonjour'); Start-Sleep -Milliseconds 400; $lu = [W]::Texte($edit) }
+    Dire ("methode-$m") ('edge-devant={0} blocnotes-devant={1} lu=[{2}]' -f $avant, $ok, $lu)
+  }
+  # Chromium : le champ garde-t-il le focus apres chaque methode ?
+  if ($champ) {
+    foreach ($m in @('alt', 'souris', 'alt-intercale')) {
+      [void] [W]::Methode('souris', $h)
+      $vp = $null; [void] $champ.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref] $vp)
+      $ok = [W]::Methode($m, $he)
+      $champ.SetFocus(); Start-Sleep -Milliseconds 200
+      [void] [W]::Methode('souris', $h)
+      $ok = [W]::Methode($m, $he)
+      $avantValeur = $vp.Current.Value
+      if ($ok) { [void] [W]::Taper('xyz'); Start-Sleep -Milliseconds 400 }
+      Dire ("edge-$m") ('devant={0} avant=[{1}] apres=[{2}]' -f $ok, $avantValeur, $vp.Current.Value)
     }
   }
 }
