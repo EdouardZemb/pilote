@@ -124,19 +124,22 @@ pub fn retenir(
     }
 }
 
-/// Vrai si le premier plan `pp` est accepté pour la retenue `r` : c'est W ; ou la chaîne de ses
-/// propriétaires mène à W, et son processus, lu dans `tous`, est de l'arbre de P sans que la liste
-/// de refus ni la règle de KeePassXC le refusent. Un premier plan nul, une autre fenêtre de P que
-/// W ne possède pas, ou un processus qui ne se lit pas, ne sont jamais acceptés.
+/// Vrai si le premier plan `pp` est accepté pour la retenue `r` : c'est W, son HWND et son
+/// processus ; ou la chaîne de ses propriétaires mène à W, et son processus, lu dans `tous`, est de
+/// l'arbre de P sans que la liste de refus ni la règle de KeePassXC le refusent. L'arbre de P se
+/// juge à la retenue et sur la liste relue `tous` : rien de né après la retenue, rien dont le PID
+/// a été repris depuis. Le HWND de W sous un autre processus, un premier plan nul, une autre
+/// fenêtre de P que W ne possède pas, ou un processus qui ne se lit pas, ne sont jamais acceptés.
 pub fn accepte(pp: Option<&PremierPlan>, r: &Retenue, tous: &[Processus]) -> bool {
     let Some(pp) = pp else {
         return false;
     };
     if pp.id == r.fenetre.id {
-        return true;
+        return pp.pid == r.fenetre.pid;
     }
     pp.proprietaires.contains(&r.fenetre.id)
         && r.arbre.contains(&pp.pid)
+        && arbre(&[r.processus.pid], tous).contains(&pp.pid)
         && processus_de(pp.pid, tous)
             .is_some_and(|p| !processus_refuse(&p.nom) && !est_keepassxc(&p.nom))
 }
@@ -634,5 +637,40 @@ mod tests {
     fn premier_plan_d_un_processus_illisible_refuse() {
         let (r, t) = retenue_avec_arbre();
         assert!(!accepte(Some(&pp(9, 101, vec![IdFenetre(1)])), &r, &t[..1]));
+    }
+    // Windows peut redonner la valeur d'un HWND détruit : le premier plan qui porte celui de W
+    // n'est W que si son processus est P. Repris par un autre processus, même un descendant de P,
+    // il est refusé, sans retomber sur la règle des fenêtres possédées.
+    #[test]
+    fn hwnd_de_w_repris_par_un_autre_processus_refuse() {
+        let (r, t) = retenue_avec_arbre();
+        assert!(!accepte(Some(&pp(1, 555, vec![])), &r, &t));
+        assert!(!accepte(Some(&pp(1, 101, vec![])), &r, &t));
+        assert!(!accepte(Some(&pp(1, 101, vec![IdFenetre(1)])), &r, &t));
+    }
+    // Un PID se réutilise pendant une frappe : une fenêtre possédée par W n'est acceptée que si son
+    // processus est encore de l'arbre de P sur la liste relue. Le PID 101 repris par un étranger,
+    // né après P d'un père hors de l'arbre, ou d'un père qui porte le PID de P mais né avant P,
+    // est refusé.
+    #[test]
+    fn pid_de_l_arbre_repris_par_un_etranger_refuse() {
+        let (r, mut t) = retenue_avec_arbre();
+        let possedee = pp(9, 101, vec![IdFenetre(1)]);
+        assert!(accepte(Some(&possedee), &r, &t));
+        let naissance_de_p = r.processus.creation.unwrap();
+        let i = t.iter().position(|q| q.pid == 101).unwrap();
+        t[i] = p(101, 999, "etranger.exe", Some(naissance_de_p + 2));
+        assert!(!accepte(Some(&possedee), &r, &t));
+        t[i] = p(101, 100, "etranger.exe", Some(naissance_de_p - 1));
+        assert!(!accepte(Some(&possedee), &r, &t));
+    }
+    // L'arbre de P se juge aussi à la retenue : un processus né ensuite, même un vrai fils de P,
+    // n'en est pas, et sa fenêtre possédée par W est refusée.
+    #[test]
+    fn processus_ne_apres_la_retenue_refuse() {
+        let (r, mut t) = retenue_avec_arbre();
+        let naissance_de_p = r.processus.creation.unwrap();
+        t.push(p(102, 100, "nouveau.exe", Some(naissance_de_p + 3)));
+        assert!(!accepte(Some(&pp(9, 102, vec![IdFenetre(1)])), &r, &t));
     }
 }
