@@ -108,8 +108,8 @@ fn porte(ligne: &str, mot: &str, entier: bool) -> bool {
 
 /// Les fautes de `sources`, des paires (chemin, texte) nommées depuis la racine du dépôt, les
 /// chemins en `/`. Une ligne dont le début, blancs ôtés, est `//` (commentaire, documentation) ne
-/// compte pas. Chaque faute nomme le fichier, la ligne et le mot, une fois par ligne :
-/// « <chemin>:<ligne> contient « <mot> » ».
+/// compte pas, mais garde son numéro. Chaque faute nomme le fichier, la ligne et le mot, une fois
+/// par ligne et par mot, dans l'ordre de `mots_refuses` : « <chemin>:<ligne> contient « <mot> » ».
 fn controler(sources: &[(String, String)]) -> Vec<String> {
     let mut fautes = Vec::new();
     for (chemin, texte) in sources {
@@ -201,6 +201,16 @@ fn racines_lues() {
     }
 }
 
+/// Le parcours descend dans les sous-dossiers : sans lui, aucune règle du domaine ne viserait un
+/// fichier réel. Les chemins exacts éprouvent aussi le `/` entre plusieurs segments.
+#[test]
+fn descend_dans_les_sous_dossiers() {
+    let s = lire_les_sources();
+    for f in ["src/domaine/mod.rs", "src/bureau/mod.rs"] {
+        assert!(s.iter().any(|(c, _)| c == f), "{f}");
+    }
+}
+
 #[test]
 fn refuse_l_horloge_hors_de_systeme() {
     refuse(
@@ -256,6 +266,37 @@ fn cherche_des_noms_bornes() {
 #[test]
 fn ignore_une_ligne_de_commentaire() {
     admet("src/domaine/bureau.rs", "// Instant::now() est refusé ici");
+}
+
+/// Une ligne de commentaire ne coupe pas la lecture du fichier, et compte dans les numéros.
+#[test]
+fn lit_et_numerote_apres_un_commentaire() {
+    refuse(
+        "src/domaine/gestes.rs",
+        "//! doc\nlet t = Instant::now();",
+        "src/domaine/gestes.rs:2 contient « Instant »",
+    );
+}
+
+/// Une faute par ligne et par mot, dans l'ordre de `mots_refuses` : deux mots, deux fautes ; un
+/// mot répété, une seule.
+#[test]
+fn une_faute_par_ligne_et_par_mot() {
+    assert_eq!(
+        controler(&[source(
+            "src/domaine/gestes.rs",
+            "let t = Instant::now(); sleep(d);"
+        )]),
+        vec![
+            "src/domaine/gestes.rs:1 contient « Instant »".to_string(),
+            "src/domaine/gestes.rs:1 contient « sleep »".to_string(),
+        ]
+    );
+    refuse(
+        "src/domaine/gestes.rs",
+        "let t = Instant::now(); let u = Instant::now();",
+        "src/domaine/gestes.rs:1 contient « Instant »",
+    );
 }
 
 #[test]
