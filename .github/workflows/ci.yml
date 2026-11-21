@@ -19,5 +19,53 @@ jobs:
     uses: ./.github/workflows/modele-socle.yml
     secrets: inherit
 
-# Les vérifications propres au projet (tests, lint, construction) s'ajoutent ici, dans un job `verifier`.
+  verifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # provisoire : mesuré à la Tâche 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Installer la chaîne de rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Cargo.lock à jour
+        run: |
+          cargo update --workspace
+          git diff --exit-code Cargo.lock
+      - name: Déposer le Cargo.lock résolu
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+
+  mutants:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60 # provisoire : mesuré à la Tâche 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Installer la chaîne de rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Installer cargo-mutants
+        run: cargo install --locked cargo-mutants --version 27.1.0
+      - name: Diff de la PR
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git diff "origin/$BASE_REF...HEAD" > pr.diff
+      - name: Mutation du domaine
+        run: cargo mutants -p pilote --in-diff pr.diff --jobs "$(nproc)"
+
 # Ce fichier est au projet : `copier update` n'y touche plus.

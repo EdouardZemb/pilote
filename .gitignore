@@ -5,3 +5,5 @@ __pycache__/
 .superpowers/
 .claude/settings.local.json
 CLAUDE.local.md
+target/
+mutants.out*/

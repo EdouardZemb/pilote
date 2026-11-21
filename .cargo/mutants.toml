@@ -1,0 +1,7 @@
+# Le test de mutation de `pilote` n'examine que le domaine, pur et portable (ADR-0003), et chaque
+# mutant ne rejoue que les tests de la bibliothèque.
+examine_globs = ["src/domaine/**/*.rs"]
+additional_cargo_test_args = ["--lib"]
+
+# Un mutant équivalent ou qui boucle s'exclut ici, nommément, avec sa raison.
+exclude_re = []
