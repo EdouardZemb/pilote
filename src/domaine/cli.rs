@@ -357,6 +357,21 @@ impl ArgsSelecteur {
     }
 }
 
+// L'attente de `focus`, `arbre`, `trouver` et `valeur`, telle que clap la lit : sa borne
+// (décision 11 du plan maître) s'écrit ici seulement.
+#[derive(clap::Args)]
+struct ArgsAttendre {
+    /// L'attente, en millisecondes, 30 000 au plus.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(..=30_000))]
+    attendre: Option<u32>,
+}
+
+impl ArgsAttendre {
+    fn convertir(self) -> Option<u32> {
+        self.attendre
+    }
+}
+
 // Les sous-commandes, telles que clap les lit.
 #[derive(clap::Subcommand)]
 enum Sous {
@@ -401,9 +416,8 @@ enum Sous {
         cible: ArgsCible,
         #[command(flatten)]
         selecteur: ArgsSelecteur,
-        /// L'attente, en millisecondes, 30 000 au plus.
-        #[arg(long, value_parser = clap::value_parser!(u32).range(..=30_000))]
-        attendre: Option<u32>,
+        #[command(flatten)]
+        attendre: ArgsAttendre,
     },
     /// Montre l'arbre des éléments de la fenêtre visée.
     Arbre {
@@ -419,9 +433,8 @@ enum Sous {
         /// Le nom du groupe à montrer.
         #[arg(long, allow_hyphen_values = true)]
         dans: Option<String>,
-        /// L'attente, en millisecondes, 30 000 au plus.
-        #[arg(long, value_parser = clap::value_parser!(u32).range(..=30_000))]
-        attendre: Option<u32>,
+        #[command(flatten)]
+        attendre: ArgsAttendre,
     },
     /// Trouve les éléments que désigne le sélecteur.
     Trouver {
@@ -429,9 +442,8 @@ enum Sous {
         cible: ArgsCible,
         #[command(flatten)]
         selecteur: ArgsSelecteur,
-        /// L'attente, en millisecondes, 30 000 au plus.
-        #[arg(long, value_parser = clap::value_parser!(u32).range(..=30_000))]
-        attendre: Option<u32>,
+        #[command(flatten)]
+        attendre: ArgsAttendre,
     },
     /// Donne le focus à l'élément que désigne le sélecteur.
     Focaliser {
@@ -463,9 +475,8 @@ enum Sous {
         /// La valeur attendue.
         #[arg(long, allow_hyphen_values = true)]
         egale: Option<String>,
-        /// L'attente, en millisecondes, 30 000 au plus.
-        #[arg(long, value_parser = clap::value_parser!(u32).range(..=30_000))]
-        attendre: Option<u32>,
+        #[command(flatten)]
+        attendre: ArgsAttendre,
     },
     /// Fait défiler l'élément que désigne le sélecteur.
     Defiler {
@@ -602,7 +613,7 @@ impl Sous {
             } => Commande::Focus {
                 cible: cible.convertir(),
                 selecteur: selecteur.convertir(),
-                attendre,
+                attendre: attendre.convertir(),
             },
             Sous::Arbre {
                 cible,
@@ -613,7 +624,7 @@ impl Sous {
                 cible: cible.convertir(),
                 max,
                 dans,
-                attendre,
+                attendre: attendre.convertir(),
             },
             Sous::Trouver {
                 cible,
@@ -622,7 +633,7 @@ impl Sous {
             } => Commande::Trouver {
                 cible: cible.convertir(),
                 selecteur: selecteur.convertir(),
-                attendre,
+                attendre: attendre.convertir(),
             },
             Sous::Focaliser { cible, selecteur } => Commande::Focaliser {
                 cible: cible.convertir(),
@@ -645,7 +656,7 @@ impl Sous {
                 cible: cible.convertir(),
                 selecteur: selecteur.convertir(),
                 egale,
-                attendre,
+                attendre: attendre.convertir(),
             },
             Sous::Defiler {
                 cible,
@@ -827,6 +838,12 @@ mod tests {
             ("touche --fenetre x Tab --fois 0", false),
             ("focus --fenetre x --attendre 30000", true),
             ("focus --fenetre x --attendre 30001", false),
+            ("arbre --fenetre x --attendre 30000", true),
+            ("arbre --fenetre x --attendre 30001", false),
+            ("trouver --fenetre x --nom n --attendre 30000", true),
+            ("trouver --fenetre x --nom n --attendre 30001", false),
+            ("valeur --fenetre x --nom n --attendre 30000", true),
+            ("valeur --fenetre x --nom n --attendre 30001", false),
             ("arbre --fenetre x --max 10000", true),
             ("arbre --fenetre x --max 10001", false),
             ("arbre --fenetre x --max 0", false),
@@ -1080,5 +1097,72 @@ mod tests {
                 comme_au_clavier: true,
             }
         );
+    }
+
+    // Correction du tour 1 : chaque valeur que la conversion porte se lit, pas seulement le nom de
+    // la sous-commande ni le succès de l'analyse. `--titre` et `--pid` départagent les fenêtres et
+    // dirigent la frappe ; les touches et `--fois` vont aux Tâches 4 et 8. Un titre qui commence
+    // par un tiret éprouve `allow_hyphen_values`.
+    #[test]
+    fn touche_porte_sa_cible_ses_touches_et_ses_fois() {
+        assert_eq!(
+            analyser(&a(
+                "pilote touche --fenetre x --titre -T --pid 42 Ctrl+A Tab --fois 3"
+            ))
+            .unwrap(),
+            Commande::Touche {
+                cible: Cible {
+                    fenetre: "x".into(),
+                    titre: Some("-T".into()),
+                    pid: Some(42),
+                },
+                touches: vec!["Ctrl+A".into(), "Tab".into()],
+                fois: 3,
+            }
+        );
+    }
+    #[test]
+    fn activer_et_taper_portent_le_titre_et_le_pid() {
+        let attendue = Cible {
+            fenetre: "x".into(),
+            titre: Some("-T".into()),
+            pid: Some(42),
+        };
+        assert_eq!(
+            analyser(&a("pilote activer --fenetre x --titre -T --pid 42")).unwrap(),
+            Commande::Activer(attendue.clone())
+        );
+        assert_eq!(
+            analyser(&a("pilote taper --pid 42 --fenetre x --texte t --titre -T")).unwrap(),
+            Commande::Taper {
+                cible: attendue,
+                source: Source::Texte("t".into()),
+                comme_au_clavier: false,
+            }
+        );
+    }
+    // `--attendre` porte sa valeur, ou rien, dans chacune des quatre sous-commandes qui l'ont.
+    #[test]
+    fn attendre_porte_sa_valeur() {
+        for s in [
+            "focus --fenetre x",
+            "arbre --fenetre x",
+            "trouver --fenetre x --nom n",
+            "valeur --fenetre x --nom n",
+        ] {
+            let attendre = |ligne: String| match analyser(&a(&ligne)).unwrap() {
+                Commande::Focus { attendre, .. }
+                | Commande::Arbre { attendre, .. }
+                | Commande::Trouver { attendre, .. }
+                | Commande::Valeur { attendre, .. } => attendre,
+                autre => panic!("{ligne} : {autre:?}"),
+            };
+            assert_eq!(
+                attendre(format!("pilote {s} --attendre 1234")),
+                Some(1234),
+                "{s}"
+            );
+            assert_eq!(attendre(format!("pilote {s}")), None, "{s}");
+        }
     }
 }
