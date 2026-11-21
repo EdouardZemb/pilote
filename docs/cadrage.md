@@ -103,7 +103,8 @@ règle de protection compris, en levant pour ce seul lancement la serrure qui le
 Code.
 
 **Le 2026-11-21, les questions de la session de construction**, chacune avec son défaut entre
-parenthèses. *Réponse attendue.*
+parenthèses. Edouard a répondu le même jour « Ok pour les défauts » : chaque défaut est retenu, et
+les ADR 0002 et 0004 portent ceux qui touchent leurs décisions (questions 1, 3 à 6, 13 et 16).
 
 1. Une option `--attendre <ms>` sur `focus`, `trouver`, `valeur` et `arbre`, qui sonde jusqu'à
    trouver l'élément ou la valeur voulus. *(oui)*
@@ -157,7 +158,8 @@ parenthèses. *Réponse attendue.*
 - **Les garde-fous sont dans le code, sans aucun fichier de réglage** : la liste de refus, les
   lectures bornées à la fenêtre visée, les valeurs secrètes jamais rendues, les deux règles de
   KeePassXC, le premier plan vérifié avant chaque événement, le poste verrouillé et la fenêtre plus
-  élevée refusés, les touches interdites, `nettoyer` borné ; la compétence porte le reste
+  élevée refusés, les touches interdites, un seul geste à la fois, `nettoyer` borné ; la compétence
+  porte le reste
   ([ADR-0002](decisions/0002-garde-fous-dans-le-code.md)). *Difficile à changer* : une frontière de
   sécurité, qui ne s'élargit qu'avec l'accord d'Edouard.
 - **Le domaine est pur et portable** : les règles se testent sans fenêtre, sous Linux comme sous
@@ -181,8 +183,7 @@ Aucune échéance. L'essai sur le poste se fait au moment que donne Edouard (que
 
 ## 5. Le plan par étapes et par lots
 
-**Étape 1, milestone « Lot 1 : l'outil et l'essai de pupitre »** (sous réserve des questions 2 et
-9) :
+**Étape 1, milestone « Lot 1 : l'outil et l'essai de pupitre »** (questions 2 et 9) :
 
 1. la PR de plan ;
 2. le socle et le clavier : le crate, le domaine pur, la CI, la sentinelle, `fenetres`, `activer`,
@@ -215,7 +216,7 @@ confiée à la session le 2026-11-21 (section 2).
 
 ## 7. Ce qui reste ouvert
 
-- Les questions 1 à 10 et 12 à 16 de la section 2, à Edouard, avant le plan.
+- Le moment de l'essai sur le poste, qu'Edouard donne (question 10).
 - Ce qui reste à prouver, à la section 1 : le verrou du premier plan sur le poste, `PrintWindow` sur
   WebView2, le refus d'une fenêtre plus élevée en CI, `IsPassword` dans KeePassXC. Si un essai de
   bout en bout se montre instable, la session le dit à Edouard avant d'en changer le statut.

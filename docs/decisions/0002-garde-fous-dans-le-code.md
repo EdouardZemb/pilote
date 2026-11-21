@@ -1,7 +1,7 @@
 # ADR-0002 — Les garde-fous : dans le code, sans aucun fichier de réglage
 
 - **Statut** : accepté le 2026-11-21
-- **Contexte amont** : les décisions 5 et 9 à 12 et les anti-buts, dans [le brief](../00-brief-initial.md) (§ 6) ; le design du 2026-11-21, hors du dépôt, ses sections « Les garde-fous », « Les règles fines » et « Les choix de la session de pupitre » ; [le cadrage](../cadrage.md) (§ 1)
+- **Contexte amont** : les décisions 5 et 9 à 12 et les anti-buts, dans [le brief](../00-brief-initial.md) (§ 6) ; le design du 2026-11-21, hors du dépôt, ses sections « Les garde-fous », « Les règles fines » et « Les choix de la session de pupitre » ; [le cadrage](../cadrage.md) (§ 1, et § 2, questions 13, 14 et 16)
 
 ## Contexte
 
@@ -45,11 +45,21 @@ passe (`IsPassword`) ne rend sa valeur ni par `valeur`, ni par `arbre`, ni par `
 soit l'application.
 
 **KeePassXC** : `capture` refuse ses fenêtres ; `taper` refuse quand le focus est dans un de ses
-champs de mot de passe.
+champs de mot de passe. Ces deux règles et `IsPassword` s'éprouvent en CI, sur le champ de mot de
+passe de l'application d'essai et sur une copie d'elle nommée `KeePassXC.exe`, jamais sur le vrai
+coffre (cadrage, question 14).
 
 **Les gestes.**
 - Ils activent la fenêtre d'eux-mêmes, puis vérifient le premier plan avant chaque touche et chaque
   caractère : une fenêtre qui vole le premier plan arrête la frappe, avec le code 1.
+- Activer ne frappe jamais Alt seule, qui ouvre le mode menu d'une fenêtre Win32 déjà au premier
+  plan et y perd le caractère suivant : rien si la fenêtre a déjà le premier plan ; sinon un
+  mouvement de souris nul, puis, à défaut, Alt entourant une touche sans effet ; le premier plan se
+  vérifie ensuite (cadrage, question 13).
+- Un seul geste à la fois : un verrou du poste, que prennent les gestes qui tapent, cliquent,
+  activent, défilent, changent la taille, lancent, ferment ou effacent ; les lectures et
+  `annonces` ne le prennent jamais. Un geste qui le trouve pris attend 5 s, puis refuse, avec le
+  code 1 (cadrage, question 16).
 - Un clic ou un cran de molette vise un point de la zone cliente, qui doit tomber sur la fenêtre
   visée : une fenêtre qui la recouvre fait refuser.
 - Le poste verrouillé fait refuser, comme une fenêtre d'un niveau d'intégrité plus haut que celui
