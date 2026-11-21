@@ -4,6 +4,12 @@
 //! processus, ni la crate `windows` ; et aucune source, sauf celle-ci, ne nomme `SetValue`. Le test
 //! lit sur le disque chaque `.rs` de `src/`, `tests/` et `essai/appli/src/`. Les règles « dans
 //! `src/` » visent les chemins qui commencent par `src/`, jamais `essai/appli/src/` ni `tests/`.
+//!
+//! Le contrôle est une recherche dans le texte, pas une analyse de Rust. Il ferme les formes
+//! courantes : les chemins complets (`std::fs::read`), les imports groupés (`use std::{fs, io};`)
+//! et les préfixes nus qu'ils laissent employer (`fs::read`). Il ne ferme ni les alias (`use std
+//! as s;`, puis `s::fs`), ni les blancs dans un chemin (`std :: fs`) : la relecture de chaque
+//! tâche du domaine les ferme.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -51,8 +57,19 @@ const PREFIXES: &[&str] = &[
     "dirs::",
 ];
 
-/// Les préfixes refusés de plus dans le domaine.
-const MOTS_DU_DOMAINE: &[&str] = &["std::fs", "std::env", "std::process", "windows::"];
+/// Les préfixes refusés de plus dans le domaine : les chemins complets, l'import groupé (`use
+/// std::{fs, io};`), qui ne nomme aucun chemin complet, et les préfixes nus qu'il laisse employer
+/// (`fs::read_to_string`). Le domaine importe donc de `std` un chemin par ligne (`use std::fmt;`).
+const MOTS_DU_DOMAINE: &[&str] = &[
+    "std::fs",
+    "std::env",
+    "std::process",
+    "windows::",
+    "std::{",
+    "fs::",
+    "process::",
+    "env::",
+];
 
 /// Le seul fichier de `src/` qui lit l'horloge et l'environnement, et résout les chemins.
 const SYSTEME: &str = "src/systeme.rs";
@@ -248,12 +265,48 @@ fn refuse_le_systeme_de_fichiers_dans_le_domaine() {
     );
 }
 
+/// Un import groupé ne nomme pas `std::fs` en entier, et ce qu'il importe s'emploie ensuite par
+/// son préfixe nu : le domaine refuse l'un et l'autre, chaque préfixe nu à sa ligne.
+#[test]
+fn refuse_un_import_groupe_dans_le_domaine() {
+    refuse(
+        "src/domaine/texte.rs",
+        "use std::{fs, io};",
+        "src/domaine/texte.rs:1 contient « std::{ »",
+    );
+    refuse(
+        "src/domaine/texte.rs",
+        "let t = fs::read_to_string(p);",
+        "src/domaine/texte.rs:1 contient « fs:: »",
+    );
+    refuse(
+        "src/domaine/texte.rs",
+        "process::exit(1);",
+        "src/domaine/texte.rs:1 contient « process:: »",
+    );
+    refuse(
+        "src/domaine/texte.rs",
+        "let a = env::args();",
+        "src/domaine/texte.rs:1 contient « env:: »",
+    );
+}
+
 #[test]
 fn refuse_set_value_partout() {
     refuse(
         "tests/essais_clavier.rs",
         "x.SetValue(v)",
         "tests/essais_clavier.rs:1 contient « SetValue »",
+    );
+}
+
+/// `SetValue`, refusé partout, ne se compte pas une seconde fois avec les mots de `src/`.
+#[test]
+fn set_value_dans_src_une_seule_faute() {
+    refuse(
+        "src/bureau/mod.rs",
+        "x.SetValue(v)",
+        "src/bureau/mod.rs:1 contient « SetValue »",
     );
 }
 
