@@ -1,8 +1,8 @@
 # Brief initial — pilote
 
-*La demande de départ, écrite par Edouard avant tout code. Elle sert de point d'appui à la phase 0 ; le cadrage la dépasse, ce brief ne se réécrit pas.*
+*La demande de départ, avant tout code. Elle sert de point d'appui à la phase 0 ; le cadrage la dépasse, ce brief ne se réécrit pas.*
 
-Ce brief reprend le design de `pilote` du 2026-11-21, écrit par la session de `pupitre` qui venait
+Ce brief, écrit par la session de construction, reprend le design de `pilote` du 2026-11-21, écrit par la session de `pupitre` qui venait
 de faire l'essai installé de sa PR #48 avec un script PowerShell, et approuvé par Edouard le même
 jour (« Ok pour le design », puis « Ok pour les défauts », en deux tours). Le design et le script de
 l'essai sont hors du dépôt, dans la boîte de réception d'Edouard ; ce qui en fait foi ici est ce
@@ -81,7 +81,8 @@ l'outil, sur l'établi installé, au lieu du script, avec les mêmes constats.
 5. Chaque appel nomme sa fenêtre ; rien ne se tape hors du premier plan ; une capture ne prend que
    la fenêtre visée ; un journal garde les gestes, sans le texte tapé.
 6. Le clic à des coordonnées est permis ; l'outil préfère l'accessibilité.
-7. Une session dédiée crée le dépôt et construit l'outil.
+7. Une session dédiée crée le dépôt et construit l'outil, après la fusion de la PR #48 de
+   `pupitre`, faite le 2026-11-21.
 8. Les navigateurs et les terminaux sont permis ; pour une page web, Claude in Chrome d'abord.
 9. Dans un terminal, la compétence interdit de taper ce que le garde de Claude Code refuserait, et
    de taper dans une autre session Claude ; l'outil ne le bloque pas.

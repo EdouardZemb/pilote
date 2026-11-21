@@ -1,7 +1,7 @@
 # ADR-0003 — L'architecture : un domaine pur et portable, une couche Windows mince
 
 - **Statut** : accepté le 2026-11-21
-- **Contexte amont** : le design du 2026-11-21, « Les tests et la CI » ([le brief](../00-brief-initial.md)) ; la méthode du modèle, « Les familles de garde-fous de l'écosystème » ; [le cadrage](../cadrage.md)
+- **Contexte amont** : le design du 2026-11-21, hors du dépôt, sa section « Les tests et la CI » ; la méthode du modèle, « Les familles de garde-fous de l'écosystème » ; [le cadrage](../cadrage.md) (§ 1) ; [ADR-0002](0002-garde-fous-dans-le-code.md)
 
 ## Contexte
 
@@ -23,8 +23,8 @@ L'option 2.
 - **Le domaine** porte les règles : la liste de refus, la valeur d'un champ de mot de passe jamais
   rendue, les règles de KeePassXC, les noms de touches et leurs modificateurs, les touches
   interdites, le choix d'un élément par un sélecteur sur un arbre factice, le format de la sortie,
-  l'équivalent de 200 %, une ligne du journal, le décodage d'un fichier à taper, les conditions de
-  `nettoyer`. Il se compile et se teste sous Linux comme sous Windows ; `cargo-mutants` s'y
+  l'équivalent de 200 %, une ligne du journal, le décodage d'un fichier à taper, les trois conditions
+  de `nettoyer` ([ADR-0002](0002-garde-fous-dans-le-code.md)). Il se compile et se teste sous Linux comme sous Windows ; `cargo-mutants` s'y
   applique, sous Linux, zéro survivant, les mutants équivalents exclus avec leur raison.
 - **La couche Windows** (`windows` en dépendance du seul Windows) lit et agit, puis rend au domaine
   des valeurs simples ; elle est éprouvée par les essais de bout en bout du runner Windows. Hors de

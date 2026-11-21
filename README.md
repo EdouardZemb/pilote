@@ -17,7 +17,7 @@ L'état du projet est dans [CLAUDE.md](CLAUDE.md#état), les versions dans [les 
 
 ## Démarrer
 
-Rien à lancer avant la première PR d'implémentation ; [le cadrage](docs/cadrage.md) dit le plan.
+<!-- La commande qui lance le projet. -->
 
 Les autres commandes sont dans [CLAUDE.md](CLAUDE.md#commandes).
 
@@ -26,11 +26,10 @@ Les autres commandes sont dans [CLAUDE.md](CLAUDE.md#commandes).
 | Document | À lire quand |
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | avant de travailler ici |
-| [Le brief](docs/00-brief-initial.md) et [le cadrage](docs/cadrage.md) | pour le besoin de départ et les choix de la phase 0 |
-| [Les décisions](docs/decisions/) | pour ce qui serait difficile à changer |
 | [La méthode](docs/modele/methode.md) | pour la façon de travailler, commune aux projets nés de `modele-projet` |
 | [Les pistes](docs/pistes.md) | pour ce qui est noté sans être engagé |
 | [Le registre](docs/registre.md) | pour ce que les lots ont appris |
+| [Les décisions](docs/decisions/) | pour ce qui a été décidé, et pourquoi |
 
 ## Contribuer
 

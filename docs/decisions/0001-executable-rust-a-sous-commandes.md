@@ -1,7 +1,7 @@
 # ADR-0001 — L'outil : un exécutable Rust à sous-commandes, sur le crate `windows`, avec une compétence qui pointe vers lui
 
 - **Statut** : accepté le 2026-11-21
-- **Contexte amont** : le design du 2026-11-21, décisions 2 à 4 et approche A ([le brief](../00-brief-initial.md)) ; [le cadrage](../cadrage.md)
+- **Contexte amont** : les décisions 2 à 4, dans [le brief](../00-brief-initial.md) (§ 6) ; le design du 2026-11-21, hors du dépôt, sa section « Les approches » ; [le cadrage](../cadrage.md) (§ 1)
 
 ## Contexte
 
