@@ -6,13 +6,18 @@ Piloter une application de bureau de Windows depuis une session Claude : le clav
 
 ## Pourquoi
 
-<!-- Trois à sept lignes : le besoin, ce que le projet fait, ce qu'il ne fait pas. -->
+Une session de Claude Code en ligne de commande n'a aucun outil pour piloter une application de
+bureau. `pilote` lui en donne un, sous Windows : il tape au clavier du poste, lit ce que lit un
+lecteur d'écran (le focus, les noms, les valeurs, les raccourcis, les zones annoncées), agit par
+l'automatisation de Windows et capture la seule fenêtre visée. Il sert d'abord aux essais installés
+et aux contrôles d'accessibilité des projets d'Edouard. Il ne lit ni ne tape jamais un secret, ne
+capture jamais l'écran entier, et ne remplace pas Claude in Chrome pour une page web.
 
 L'état du projet est dans [CLAUDE.md](CLAUDE.md#état), les versions dans [les publications](https://github.com/EdouardZemb/pilote/releases).
 
 ## Démarrer
 
-<!-- La commande qui lance le projet. -->
+Rien à lancer avant la première PR d'implémentation ; [le cadrage](docs/cadrage.md) dit le plan.
 
 Les autres commandes sont dans [CLAUDE.md](CLAUDE.md#commandes).
 
@@ -21,6 +26,8 @@ Les autres commandes sont dans [CLAUDE.md](CLAUDE.md#commandes).
 | Document | À lire quand |
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | avant de travailler ici |
+| [Le brief](docs/00-brief-initial.md) et [le cadrage](docs/cadrage.md) | pour le besoin de départ et les choix de la phase 0 |
+| [Les décisions](docs/decisions/) | pour ce qui serait difficile à changer |
 | [La méthode](docs/modele/methode.md) | pour la façon de travailler, commune aux projets nés de `modele-projet` |
 | [Les pistes](docs/pistes.md) | pour ce qui est noté sans être engagé |
 | [Le registre](docs/registre.md) | pour ce que les lots ont appris |
