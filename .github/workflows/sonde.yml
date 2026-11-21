@@ -1,0 +1,28 @@
+name: sonde
+
+# Essai jetable de la branche essai/runner, jamais fusionnée : le bureau du runner Windows.
+on:
+  push:
+    branches: ['essai/**']
+
+permissions:
+  contents: read
+
+jobs:
+  sonde:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: La sonde
+        shell: powershell
+        run: ./essai/sonde.ps1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: sonde-${{ matrix.os }}
+          path: ${{ runner.temp }}/sonde
