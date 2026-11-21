@@ -1,0 +1,11 @@
+# Écrit par Copier. Ne pas modifier à la main : copier update le relit (docs/modele/methode.md).
+_commit: v0.14.0
+_src_path: gh:EdouardZemb/modele-projet
+branche_principale: main
+cible: aucune
+compte: EdouardZemb
+description: 'Piloter une application de bureau de Windows depuis une session Claude
+    : le clavier, l''automatisation de Windows et la capture de la seule fenêtre visée'
+fusion: session
+nature: code
+nom: pilote
