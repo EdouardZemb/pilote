@@ -8,7 +8,7 @@
 use crate::domaine::sortie::Arret;
 use crate::domaine::sortie::echapper;
 use crate::domaine::touches::Evenement;
-use crate::domaine::touches::evenement;
+use crate::domaine::touches::lot_touches;
 use crate::domaine::touches::vk;
 
 /// Le plus grand nombre de caractères qu'un texte de `taper` peut porter.
@@ -115,18 +115,6 @@ pub fn lot_unicode(u: Unite, balayage: &mut dyn FnMut(u8) -> u16) -> Vec<Eveneme
         .collect()
 }
 
-/// Le lot qui enfonce les touches virtuelles `enfoncees` dans l'ordre, puis les relâche dans
-/// l'ordre inverse. Chaque touche lit son balayage une fois, et son relâchement le reprend.
-fn lot_touches(enfoncees: &[u8], balayage: &mut dyn FnMut(u8) -> u16) -> Vec<Evenement> {
-    let touches: Vec<(u8, u16)> = enfoncees.iter().map(|&v| (v, balayage(v))).collect();
-    let mut lot: Vec<Evenement> = touches
-        .iter()
-        .map(|&(v, b)| evenement(v, b, false))
-        .collect();
-    lot.extend(touches.iter().rev().map(|&(v, b)| evenement(v, b, true)));
-    lot
-}
-
 /// Ce que `ToUnicodeEx` produit d'une touche dans un état : une touche morte, ou un texte, vide
 /// quand la touche ne produit rien.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,7 +140,7 @@ pub trait Disposition {
 /// balayages. Tout autre caractère prend la touche et l'état que rend `scan` : l'état 0 frappe la
 /// touche seule, l'état 1 Maj gauche, l'état 6 (AltGr) Ctrl gauche puis Alt droite, l'état 7 Maj
 /// gauche, Ctrl gauche puis Alt droite ; puis la touche, puis les relâchements dans l'ordre
-/// inverse. Chaque touche lit son balayage une fois.
+/// inverse (`touches::lot_touches`). Chaque touche lit son balayage une fois.
 ///
 /// Il refuse en 1, « caractère absent du clavier : « <c> » », un caractère hors du plan de base,
 /// que `scan` ne lit pas, puis tout autre état : -1 (aucune touche), Ctrl sans Alt (2, 3), Alt
@@ -691,5 +679,21 @@ mod tests {
                 "{c}"
             );
         }
+    }
+
+    // Un caractère hors du plan de base refuse avant que la disposition ne soit lue : il n'a pas
+    // d'unité UTF-16 seule à donner à `scan`. Les 16 bits bas de U+10040 valent 0x0040, « @ »,
+    // que l'AZERTY frappe par AltGr : les tronquer ferait chercher « @ » à sa place.
+    #[test]
+    fn hors_du_plan_de_base_refuse_sans_lire_la_disposition() {
+        let mut d = Notee::new();
+        assert_eq!(
+            lot_clavier('\u{10040}', &mut d),
+            Err(Arret::Refus(
+                "caractère absent du clavier : « \u{10040} »".into()
+            ))
+        );
+        assert!(!d.consultee, "la disposition a été lue");
+        assert!(d.balayages.is_empty(), "{:?}", d.balayages);
     }
 }

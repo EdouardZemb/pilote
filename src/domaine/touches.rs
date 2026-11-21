@@ -240,16 +240,31 @@ pub fn evenement(vk: u8, balayage_ex: u16, relachee: bool) -> Evenement {
     }
 }
 
+/// Le lot qui enfonce les touches virtuelles `enfoncees` dans l'ordre donné, puis les relâche
+/// toutes dans l'ordre inverse. Les lots d'une combinaison (`lot_combinaison`) et d'un caractère
+/// (`texte::lot_unicode`, `texte::lot_clavier`) passent par lui : chacun relâche ainsi tout ce
+/// qu'il enfonce. Chaque touche prend son balayage de `balayage`, une fois, à l'enfoncement, et
+/// son relâchement le reprend.
+pub fn lot_touches(enfoncees: &[u8], balayage: &mut dyn FnMut(u8) -> u16) -> Vec<Evenement> {
+    let paires: Vec<(u8, u16)> = enfoncees.iter().map(|&v| (v, balayage(v))).collect();
+    let mut lot: Vec<Evenement> = paires
+        .iter()
+        .map(|&(v, b)| evenement(v, b, false))
+        .collect();
+    lot.extend(paires.iter().rev().map(|&(v, b)| evenement(v, b, true)));
+    lot
+}
+
 /// Le lot, envoyé d'un seul tenant, qui frappe la combinaison `c`, sa touche étant la touche
 /// virtuelle `vk` : Ctrl gauche, Maj gauche et Alt gauche enfoncées dans cet ordre, si `c` les
 /// demande, la touche enfoncée puis relâchée, puis les modificateurs relâchés dans l'ordre
-/// inverse. Chaque touche prend son balayage de `balayage`, une fois.
+/// inverse (`lot_touches`). Chaque touche prend son balayage de `balayage`, une fois.
 pub fn lot_combinaison(
     c: &Combinaison,
     vk: u8,
     balayage: &mut dyn FnMut(u8) -> u16,
 ) -> Vec<Evenement> {
-    let enfoncees: Vec<(u8, u16)> = [
+    let enfoncees: Vec<u8> = [
         (c.ctrl, vk::CTRL_G),
         (c.maj, vk::MAJ_G),
         (c.alt, vk::ALT_G),
@@ -257,14 +272,9 @@ pub fn lot_combinaison(
     ]
     .into_iter()
     .filter(|&(demandee, _)| demandee)
-    .map(|(_, v)| (v, balayage(v)))
+    .map(|(_, v)| v)
     .collect();
-    let mut lot: Vec<Evenement> = enfoncees
-        .iter()
-        .map(|&(v, b)| evenement(v, b, false))
-        .collect();
-    lot.extend(enfoncees.iter().rev().map(|&(v, b)| evenement(v, b, true)));
-    lot
+    lot_touches(&enfoncees, balayage)
 }
 
 #[cfg(test)]
@@ -821,5 +831,36 @@ mod tests {
             lot_combinaison(&c, vk::RETOUR_CHARIOT, &mut balayage_essai),
             vec![t(0x0D, 0x1C, false, false), t(0x0D, 0x1C, false, true)]
         );
+    }
+
+    // Le lot d'une liste de touches, par ses valeurs : les touches enfoncées dans l'ordre donné,
+    // qui n'est pas celui de leurs codes, puis relâchées dans l'ordre inverse, chacune avec son
+    // balayage et son extension. Le balayage se lit une fois par touche, à l'enfoncement, et le
+    // relâchement le reprend.
+    #[test]
+    fn lot_touches_par_ses_valeurs() {
+        let t = |vk, scan, etendue, relachee| Evenement::Touche {
+            vk,
+            scan,
+            etendue,
+            relachee,
+        };
+        let mut lus = Vec::new();
+        let mut note = |v| {
+            lus.push(v);
+            balayage_essai(v)
+        };
+        assert_eq!(
+            lot_touches(&[vk::MAJ_G, vk::ALT_D, vk::HAUT], &mut note),
+            vec![
+                t(0xA0, 0x2A, false, false),
+                t(0xA5, 0x38, true, false),
+                t(0x26, 0x48, true, false),
+                t(0x26, 0x48, true, true),
+                t(0xA5, 0x38, true, true),
+                t(0xA0, 0x2A, false, true),
+            ]
+        );
+        assert_eq!(lus, [0xA0, 0xA5, 0x26]);
     }
 }
