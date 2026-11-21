@@ -292,4 +292,25 @@ mod tests {
     fn echappe_en_hexadecimal_majuscule() {
         assert_eq!(echapper("\u{1b}\u{7f}\u{9b}"), r"\u{001B}\u{007F}\u{009B}");
     }
+
+    // Hors du plan : `valeur` échappe, et une valeur qui porte un retour sort sur une seule ligne.
+    // Aucune entrée des tests du plan ne portait un caractère que `echapper` transforme : sans
+    // ces tests, `valeur` pouvait se passer d'`echapper` sans qu'aucun test échoue.
+    #[test]
+    fn valeur_echappe_ses_caracteres() {
+        assert_eq!(valeur("a\nb>c\\d\u{7}"), r"a\nb\>c\\d\u{0007}");
+        assert_eq!(valeur("a b\n"), r#""a b\n""#);
+        assert_eq!(valeur("a\"b\n"), r#""a\"b\n""#);
+    }
+    #[test]
+    fn ligne_dont_la_valeur_porte_un_retour_tient_en_une_ligne() {
+        let l = Ligne {
+            genre: "Fenetre",
+            nom: Some("t\nu".into()),
+            champs: vec![("processus", "a\nb".into())],
+        };
+        let ecrite = formater(&l);
+        assert_eq!(ecrite, r"[Fenetre] <t\nu> processus=a\nb");
+        assert!(!ecrite.contains('\n'));
+    }
 }
