@@ -163,12 +163,20 @@ fn aumid(h: HWND) -> Option<String> {
 
 /// Les processus des fenêtres enfants de `h`, à toute profondeur, chacun une fois, le sien compris
 /// s'il en porte. L'énumération part toujours de `h` : sans parent, elle lirait tout le bureau.
+/// Un PID nul est une lecture ratée, celle d'une fille détruite entre l'énumération et la lecture
+/// de son processus : il n'y paraît pas. L'instantané des processus porte en effet une entrée de
+/// PID 0, le processus inactif du système, que le domaine prendrait pour le processus lisible d'un
+/// enfant d'un autre processus, et le cadre d'une application du Store sans AUMID passerait alors.
 fn pids_enfants(h: HWND) -> Vec<u32> {
     let mut enfants: Vec<HWND> = Vec::new();
     // SAFETY: comme pour `fenetres` ; le retour d'`EnumChildWindows` ne porte rien.
     let _ =
         unsafe { EnumChildWindows(Some(h), Some(collecter), LPARAM(&raw mut enfants as isize)) };
-    let mut pids: Vec<u32> = enfants.into_iter().map(pid_de).collect();
+    let mut pids: Vec<u32> = enfants
+        .into_iter()
+        .map(pid_de)
+        .filter(|&pid| pid != 0)
+        .collect();
     pids.sort_unstable();
     pids.dedup();
     pids

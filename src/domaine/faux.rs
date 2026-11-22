@@ -107,6 +107,9 @@ pub struct FauxBureau {
     pub premier_plan: Option<PremierPlan>,
     /// Le premier plan qui passe à cette fenêtre juste après le n-ième envoi.
     pub vol: Option<(usize, PremierPlan)>,
+    /// Le premier plan qui passe à cette fenêtre pendant la lecture de l'instantané des processus
+    /// qui suit le n-ième envoi : une lecture qui prend du temps sur le vrai poste.
+    pub vol_pendant_l_instantane: Option<(usize, PremierPlan)>,
     /// Quand Windows accorde le premier plan demandé.
     pub accord: Accord,
     /// La réduction de la fenêtre visée.
@@ -174,6 +177,7 @@ impl FauxBureau {
             relecture: None,
             premier_plan: Some(pp(1, 100, Vec::new())),
             vol: None,
+            vol_pendant_l_instantane: None,
             accord: Accord::AuMouvementNul,
             reduction: Reduction::Aucune,
             verrou: Ok(EtatVerrou::Pris),
@@ -312,6 +316,11 @@ impl Bureau for FauxBureau {
         self.appels.push(AppelFaux::Processus);
         if let Some(e) = &self.erreur_processus {
             return Err(e.clone());
+        }
+        if let Some((n, vole)) = &self.vol_pendant_l_instantane
+            && *n == self.envois_faits
+        {
+            self.premier_plan = Some(vole.clone());
         }
         Ok(self
             .processus

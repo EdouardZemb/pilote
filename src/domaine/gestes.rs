@@ -460,11 +460,15 @@ fn activer(r: &Retenue, s: &mut Suivi, b: &mut dyn Bureau) -> Result<PremierPlan
 }
 
 /// Le premier plan, s'il est accepté pour la retenue `r` (décision 11), jugé sur l'instantané des
-/// processus relu juste après lui.
+/// processus relu juste après lui. L'instantané prend du temps sur le vrai poste : le premier plan
+/// se relit après lui, et doit être le même qu'avant. C'est cette dernière lecture qui se juge et
+/// se rend, pour que l'envoi qui suit parte juste après elle : une fenêtre qui prend le premier
+/// plan pendant l'instantané ne reçoit rien.
 fn premier_plan_accepte(r: &Retenue, b: &mut dyn Bureau) -> Result<Option<PremierPlan>, Arret> {
-    let pp = b.premier_plan();
+    let avant = b.premier_plan();
     let tous = b.processus().map_err(echec_systeme)?;
-    Ok(pp.filter(|pp| accepte(Some(pp), r, &tous)))
+    let apres = b.premier_plan();
+    Ok(apres.filter(|pp| avant.as_ref() == Some(pp) && accepte(Some(pp), r, &tous)))
 }
 
 /// La sonde du premier plan après une demande : toutes les 100 ms, 1 s au plus.
@@ -1142,11 +1146,13 @@ mod tests {
                 AppelFaux::EstReduite,
                 AppelFaux::PremierPlan,
                 AppelFaux::Processus,
+                AppelFaux::PremierPlan,
                 AppelFaux::Fenetres,
                 AppelFaux::Processus,
                 AppelFaux::TouchesEnfoncees,
                 AppelFaux::PremierPlan,
                 AppelFaux::Processus,
+                AppelFaux::PremierPlan,
                 AppelFaux::Envoi(vec![t(0x41, 0x10, false), t(0x41, 0x10, true)]),
                 AppelFaux::Attendre(Duree(5)),
                 AppelFaux::Ajout(format!("{TETE}taper\tappli-essai\t0\t1\n")),
@@ -1472,6 +1478,9 @@ mod tests {
         );
         assert!(aucun_geste(&b));
     }
+    // Chaque unité part juste après la dernière lecture du premier plan, faite après l'instantané
+    // des processus, lui-même lu après une première lecture du premier plan : rien d'autre ne
+    // s'intercale entre le dernier contrôle et l'envoi.
     #[test]
     fn premier_plan_verifie_avant_chaque_unite() {
         let mut b = FauxBureau::avec_appli();
@@ -1484,13 +1493,15 @@ mod tests {
             .collect();
         assert_eq!(envois.len(), 3);
         for &i in &envois {
-            let avant = &b.appels[..i];
-            let lu = avant
-                .iter()
-                .rposition(|a| *a == AppelFaux::PremierPlan)
-                .expect("un premier plan lu avant l'envoi");
-            assert!(!avant[lu..].iter().any(|a| matches!(a, AppelFaux::Envoi(_))));
-            assert!(avant[lu..].contains(&AppelFaux::Processus));
+            assert!(
+                b.appels[..i].ends_with(&[
+                    AppelFaux::PremierPlan,
+                    AppelFaux::Processus,
+                    AppelFaux::PremierPlan
+                ]),
+                "appel {i} : {:?}",
+                &b.appels[..i]
+            );
         }
     }
     #[test]
@@ -1517,6 +1528,22 @@ mod tests {
             ))
         );
         assert_eq!(b.envois().len(), 3);
+    }
+    // Une fenêtre qui prend le premier plan pendant la lecture de l'instantané des processus, après
+    // le contrôle du premier plan, ne reçoit rien : le premier plan se relit après l'instantané, et
+    // l'unité ne part que s'il n'a pas changé.
+    #[test]
+    fn vol_pendant_l_instantane_n_envoie_rien_au_voleur() {
+        let mut b = FauxBureau::avec_appli();
+        b.vol_pendant_l_instantane = Some((1, pp(50, 555, vec![])));
+        let i = x(&mut b, "taper --fenetre appli-essai --texte abc");
+        assert_eq!(
+            i,
+            Issue::arret(Arret::Refus(
+                "le premier plan a changé : 1 unités sur 3 sont parties".into()
+            ))
+        );
+        assert_eq!(b.envois().len(), 1);
     }
     #[test]
     fn une_combinaison_part_en_un_seul_envoi() {

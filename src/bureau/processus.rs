@@ -6,6 +6,7 @@ use super::jusqu_au_nul;
 use super::taille;
 use crate::domaine::bureau::ErreurSysteme;
 use crate::domaine::processus::Processus;
+use windows::Win32::Foundation::ERROR_NO_MORE_FILES;
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Security::GetSidSubAuthority;
@@ -27,8 +28,9 @@ use windows::Win32::System::Threading::OpenProcessToken;
 use windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
 
 /// L'instantané des processus : chacun avec son parent, le nom de son exécutable et son heure de
-/// création. La fin du parcours arrive en erreur de `Process32NextW` ; un premier processus
-/// illisible est une erreur, puisque `pilote` au moins tourne.
+/// création. La fin du parcours arrive en erreur de `Process32NextW`, `ERROR_NO_MORE_FILES` ; toute
+/// autre erreur en est une, car un instantané tronqué cacherait au domaine un processus qu'il
+/// refuse. Un premier processus illisible est une erreur aussi, puisque `pilote` au moins tourne.
 pub fn processus() -> Result<Vec<Processus>, ErreurSysteme> {
     // SAFETY: l'instantané se ferme à la sortie de portée de sa `Poignee` ; `entree` porte sa
     // taille dans `dwSize`, comme `Process32FirstW` l'exige.
@@ -50,8 +52,10 @@ pub fn processus() -> Result<Vec<Processus>, ErreurSysteme> {
             nom: jusqu_au_nul(&entree.szExeFile),
             creation: creation(entree.th32ProcessID),
         });
-        if unsafe { Process32NextW(instantane.0, &raw mut entree) }.is_err() {
-            return Ok(lus);
+        match unsafe { Process32NextW(instantane.0, &raw mut entree) } {
+            Ok(()) => {}
+            Err(e) if e.code() == ERROR_NO_MORE_FILES.to_hresult() => return Ok(lus),
+            Err(e) => return Err(ErreurSysteme(format!("Process32NextW : {e}"))),
         }
     }
 }
