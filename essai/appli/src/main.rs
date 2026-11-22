@@ -402,7 +402,8 @@ mod fenetre {
 
 /// Les règles de l'application qui ne demandent aucune fenêtre : la lecture des arguments, la
 /// forme des lignes du fichier d'événements, le tri des messages de la page et le compte des
-/// saisies que guette le voleur. Elles se testent sous Linux comme sous Windows.
+/// saisies que guette le voleur. Elles se compilent et se testent sans Windows ; leurs tests, comme
+/// tout test hors du domaine de `pilote`, ne tournent qu'en CI.
 #[cfg(any(windows, test))]
 mod regles {
     use std::ffi::OsStr;
@@ -606,6 +607,10 @@ mod regles {
         }
     }
 
+    /// Ces tests ne tournent qu'en CI, dans l'étape de la sentinelle du job `windows`, par
+    /// `--include-ignored` : hors du domaine de `pilote` et de son contrôle statique, chaque test
+    /// porte un `#[ignore = …]`, que `tests/statique.rs` exige. Un test de l'application, qui
+    /// dépend de la crate `windows`, ne part ainsi jamais sur le poste par un simple `cargo test`.
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -630,6 +635,7 @@ mod regles {
             }
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn teneur_reconnu_en_premier_argument() {
             match analyser(&args(&["--tenir-le-verrou", "verrou.txt"])) {
@@ -638,6 +644,7 @@ mod regles {
             }
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn teneur_ne_lit_ni_dossier_ni_option() {
             assert_eq!(
@@ -654,6 +661,7 @@ mod regles {
             );
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn dossier_et_fichier_seuls_donnent_les_defauts() {
             let o = fenetres(&["profil", "evenements.txt"]);
@@ -679,6 +687,7 @@ mod regles {
             );
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn chaque_option_se_lit() {
             let o = fenetres(&[
@@ -715,6 +724,7 @@ mod regles {
             );
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn sans_dossier_ni_fichier_dit_l_usage() {
             assert_eq!(refus(&[]), USAGE);
@@ -723,6 +733,7 @@ mod regles {
             assert_eq!(refus(&["profil", "--dialogue"]), USAGE);
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn une_option_inconnue_est_refusee() {
             assert_eq!(
@@ -739,6 +750,7 @@ mod regles {
             );
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn une_valeur_manquante_est_refusee() {
             assert_eq!(
@@ -760,6 +772,7 @@ mod regles {
             );
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn une_valeur_refusee_se_dit() {
             assert_eq!(
@@ -788,6 +801,7 @@ mod regles {
             );
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn une_option_repetee_est_refusee() {
             for (mots, option) in [
@@ -816,6 +830,7 @@ mod regles {
             }
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn une_ligne_porte_le_titre_une_tabulation_et_le_corps() {
             assert_eq!(
@@ -824,12 +839,14 @@ mod regles {
             );
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn permis_dit_vrai_ou_faux() {
             assert_eq!(permis(true), "{\"genre\":\"permis\",\"valeur\":\"vrai\"}");
             assert_eq!(permis(false), "{\"genre\":\"permis\",\"valeur\":\"faux\"}");
         }
 
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn les_messages_de_la_page_se_trient() {
             assert!(matches!(classer("ouvrir"), Message::Ouvrir));
@@ -851,6 +868,7 @@ mod regles {
 
         /// Le fichier de la cible se lit par morceaux, pendant qu'elle l'écrit : une ligne compte
         /// quand elle est complète, une fois, et seule une saisie compte.
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
         #[test]
         fn le_compteur_ne_compte_que_les_saisies_des_lignes_completes() {
             let mut c = Compteur::default();

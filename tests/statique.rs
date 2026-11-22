@@ -7,12 +7,12 @@
 //!
 //! Les essais de bout en bout ne tournent jamais sur le poste (décision 13 du plan maître) : chaque
 //! `#[test]` des fichiers d'essai, `tests/essais_*.rs`, porte sur la ligne d'avant l'attribut
-//! `IGNORE_DES_ESSAIS` ; chaque autre `#[test]` de `pilote`, hors du domaine et de ce fichier, un
-//! `#[ignore = …]` ; aucun fichier de `tests/`, hors du module commun des essais et de ce fichier,
-//! ne nomme un mot de lancement ; la couche Windows, `src/bureau/`, n'a aucun test ; et seuls elle,
-//! `src/lib.rs` et ce fichier nomment le poste réel, `BureauWindows`. L'application d'essai, membre
-//! à part qui ne dépend pas de `pilote`, n'est pas tenue aux attributs : ses tests sont des règles
-//! pures, lancées sous Linux comme sous Windows.
+//! `IGNORE_DES_ESSAIS` ; chaque autre `#[test]` lu, hors du domaine et de ce fichier, un
+//! `#[ignore = …]`, l'application d'essai comprise : seuls les tests du domaine et du contrôle
+//! tournent par un simple `cargo test`, et un test qui toucherait Windows ne part qu'en CI ; aucun
+//! fichier de `tests/`, hors du module commun des essais et de ce fichier, ne nomme un mot de
+//! lancement ; la couche Windows, `src/bureau/`, n'a aucun test ; et seuls elle, `src/lib.rs` et
+//! ce fichier nomment le poste réel, `BureauWindows`.
 //!
 //! Le contrôle est une recherche dans le texte, pas une analyse de Rust. Il ferme les formes
 //! courantes : les chemins complets (`std::fs::read`), les imports groupés (`use std::{fs, io};`)
@@ -109,8 +109,8 @@ const BUREAU_REEL: &str = "BureauWindows";
 /// L'attribut que porte, sur la ligne d'avant, chaque `#[test]` d'un fichier d'essai.
 const IGNORE_DES_ESSAIS: &str = "#[ignore = \"il pilote le bureau : la CI le lance\"]";
 
-/// Le début de l'attribut que porte, sur la ligne d'avant, chaque autre `#[test]` de `pilote` hors
-/// du domaine et de ce fichier.
+/// Le début de l'attribut que porte, sur la ligne d'avant, chaque autre `#[test]` lu, hors du
+/// domaine et de ce fichier.
 const IGNORE: &str = "#[ignore = ";
 
 /// Les racines lues, depuis la racine du dépôt.
@@ -158,22 +158,20 @@ fn est_un_essai(chemin: &str) -> bool {
 enum Attribut {
     /// `IGNORE_DES_ESSAIS`, exactement : un fichier d'essai.
     DesEssais,
-    /// Un `#[ignore = …]`, de toute raison : le reste de `pilote`, hors du domaine et d'ici.
+    /// Un `#[ignore = …]`, de toute raison : tout le reste, hors du domaine et d'ici.
     Ignore,
 }
 
-/// L'attribut qu'exige chaque `#[test]` de `chemin` : celui des essais dans un fichier d'essai ; un
-/// `#[ignore = …]` dans le reste de `tests/`, hors d'ici, et dans `src/`, hors du domaine ; aucun
-/// ailleurs (le domaine, ce fichier, l'application d'essai).
+/// L'attribut qu'exige chaque `#[test]` de `chemin` : aucun dans le domaine et dans ce fichier ;
+/// celui des essais dans un fichier d'essai ; un `#[ignore = …]` partout ailleurs, le reste de
+/// `src/` et de `tests/` comme l'application d'essai.
 fn attribut_exige(chemin: &str) -> Option<Attribut> {
-    if est_un_essai(chemin) {
-        Some(Attribut::DesEssais)
-    } else if (chemin.starts_with("tests/") && chemin != STATIQUE)
-        || (chemin.starts_with("src/") && !chemin.starts_with(DOMAINE))
-    {
-        Some(Attribut::Ignore)
-    } else {
+    if chemin.starts_with(DOMAINE) || chemin == STATIQUE {
         None
+    } else if est_un_essai(chemin) {
+        Some(Attribut::DesEssais)
+    } else {
+        Some(Attribut::Ignore)
     }
 }
 
@@ -530,11 +528,70 @@ fn admet_un_test_ignore_hors_du_domaine() {
     admet("src/systeme.rs", "#[ignore = \"x\"]\n#[test]\nfn a() {}");
 }
 
-/// L'application d'essai est un membre à part, qui ne dépend pas de `pilote` : ses tests, des
-/// règles pures qui tournent aussi sous Linux, ne peuvent pas appeler la couche Windows réelle.
+/// Un `#[test]` indenté, comme dans un `mod tests`, se voit, et son `#[ignore = …]` indenté aussi.
 #[test]
-fn admet_un_test_de_l_application_d_essai() {
-    admet("essai/appli/src/main.rs", "#[test]\nfn a() {}");
+fn refuse_un_test_indente_sans_ignore() {
+    refuse(
+        "src/systeme.rs",
+        "mod tests {\n    #[test]\n    fn a() {}\n}",
+        "src/systeme.rs:2 : #[test] sans #[ignore]",
+    );
+}
+
+#[test]
+fn admet_un_test_indente_ignore() {
+    admet(
+        "src/systeme.rs",
+        "mod t {\n    #[ignore = \"x\"]\n    #[test]\n    fn a() {}\n}",
+    );
+}
+
+/// Le reste de `tests/`, hors des fichiers d'essai et d'ici, est tenu au `#[ignore = …]` : le module
+/// commun, un autre fichier, et un fichier sous un dossier `essais_*`, qui n'est pas un fichier
+/// d'essai.
+#[test]
+fn refuse_un_test_sans_ignore_dans_tests() {
+    refuse(
+        "tests/commun/mod.rs",
+        "#[test]\nfn a() {}",
+        "tests/commun/mod.rs:1 : #[test] sans #[ignore]",
+    );
+    refuse(
+        "tests/essais_x/a.rs",
+        "#[test]\nfn a() {}",
+        "tests/essais_x/a.rs:1 : #[test] sans #[ignore]",
+    );
+}
+
+#[test]
+fn admet_un_test_ignore_dans_tests() {
+    admet("tests/autre.rs", "#[ignore = \"x\"]\n#[test]\nfn a() {}");
+}
+
+/// Le domaine et ce fichier ne sont pas tenus à l'attribut : leurs tests tournent partout.
+#[test]
+fn admet_un_test_du_domaine_et_du_controle() {
+    admet("src/domaine/gestes.rs", "#[test]\nfn a() {}");
+    admet("tests/statique.rs", "#[test]\nfn a() {}");
+}
+
+/// L'application d'essai n'est ni le domaine, ni ce fichier, ni un fichier d'essai : chacun de ses
+/// tests porte un `#[ignore = …]`, et ne tourne qu'en CI.
+#[test]
+fn refuse_un_test_de_l_application_d_essai_sans_ignore() {
+    refuse(
+        "essai/appli/src/main.rs",
+        "#[test]\nfn a() {}",
+        "essai/appli/src/main.rs:1 : #[test] sans #[ignore]",
+    );
+}
+
+#[test]
+fn admet_un_test_ignore_de_l_application_d_essai() {
+    admet(
+        "essai/appli/src/main.rs",
+        "#[ignore = \"x\"]\n#[test]\nfn a() {}",
+    );
 }
 
 #[test]
@@ -564,6 +621,11 @@ fn refuse_un_test_dans_la_couche_windows() {
         "src/bureau/clavier.rs",
         "#[ignore = \"x\"]\n#[test]\nfn a() {}",
         "src/bureau/clavier.rs:2 : #[test] dans la couche Windows",
+    );
+    refuse(
+        "src/bureau/clavier.rs",
+        "mod t {\n    #[ignore = \"x\"]\n    #[test]\n    fn a() {}\n}",
+        "src/bureau/clavier.rs:3 : #[test] dans la couche Windows",
     );
 }
 

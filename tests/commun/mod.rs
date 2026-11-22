@@ -79,6 +79,13 @@ use windows::core::w;
 /// Le pas des sondages.
 const PAS: Duration = Duration::from_millis(50);
 
+/// Le plus long qu'un événement ou un état attendu met à paraître.
+pub const DELAI: Duration = Duration::from_secs(5);
+
+/// Le temps laissé aux événements pour arriver, avant de juger qu'aucun ne paraît, ou de lire la
+/// dernière valeur reçue.
+pub const CALME: Duration = Duration::from_millis(500);
+
 /// Le plus long qu'une application d'essai met à dire `pret`.
 const PRET_MAX: Duration = Duration::from_secs(20);
 
@@ -208,7 +215,8 @@ fn fichier_d_erreur(profil: &Profil) -> Stdio {
 
 /// Vrai si `critere` devient vrai avant `delai`, sondé tout de suite, puis toutes les 50 ms, puis
 /// une dernière fois à la borne.
-fn sonder(delai: Duration, mut critere: impl FnMut() -> bool) -> bool {
+pub fn sonder(delai: Duration, mut critere: impl FnMut() -> bool) -> bool {
+    exiger_la_ci();
     let debut = Instant::now();
     loop {
         if critere() {

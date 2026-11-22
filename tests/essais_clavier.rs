@@ -8,6 +8,8 @@
 
 mod commun;
 
+use commun::CALME;
+use commun::DELAI;
 use commun::Evenement;
 use commun::Profil;
 use commun::Shell;
@@ -18,13 +20,6 @@ use commun::pilote;
 use commun::shell;
 use std::fs;
 use std::thread;
-use std::time::Duration;
-
-/// Le plus long qu'un événement attendu met à paraître dans le fichier de l'application.
-const DELAI: Duration = Duration::from_secs(5);
-
-/// Le temps laissé aux événements pour arriver, avant de juger qu'aucun ne paraît.
-const CALME: Duration = Duration::from_millis(500);
 
 /// Lance l'application, le focus sur `champ`, y tape `texte` par `taper --texte`, et vérifie que la
 /// dernière saisie de `champ` le porte. `texte` ne porte rien que `JSON.stringify` échappe : sa

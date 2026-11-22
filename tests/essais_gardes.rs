@@ -9,6 +9,8 @@
 mod commun;
 
 use commun::Appli;
+use commun::CALME;
+use commun::DELAI;
 use commun::Profil;
 use commun::Shell;
 use commun::Sortie;
@@ -18,6 +20,7 @@ use commun::lancer_appli;
 use commun::pilote;
 use commun::reduire_les_parametres;
 use commun::shell;
+use commun::sonder;
 use commun::tenir_le_verrou;
 use pilote::domaine::sortie::echapper;
 use std::fs;
@@ -25,14 +28,6 @@ use std::fs::OpenOptions;
 use std::os::windows::fs::OpenOptionsExt;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
-
-/// Le plus long qu'un événement ou un état attendu met à paraître.
-const DELAI: Duration = Duration::from_secs(5);
-
-/// Le temps laissé aux événements pour arriver, avant de juger qu'aucun ne paraît, ou de lire la
-/// dernière valeur reçue.
-const CALME: Duration = Duration::from_millis(500);
 
 /// Le plus long que les Paramètres mettent à ouvrir leur fenêtre.
 const PARAMETRES_MAX: Duration = Duration::from_secs(15);
@@ -42,20 +37,6 @@ const KEEPASSXC: &str = "KeePassXC : touche et taper sont refusés dans cette ve
 
 /// Le message du refus des Paramètres, le nom gardant la casse de l'exécutable.
 const SYSTEMSETTINGS: &str = "fenêtre refusée : processus SystemSettings";
-
-/// Vrai si `critere` devient vrai avant `delai`, sondé toutes les 50 ms.
-fn attendre_que(delai: Duration, mut critere: impl FnMut() -> bool) -> bool {
-    let debut = Instant::now();
-    loop {
-        if critere() {
-            return true;
-        }
-        if debut.elapsed() >= delai {
-            return false;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-}
 
 /// Vrai si la sortie de `fenetres` donne `premier-plan=oui` à la ligne du processus `processus`.
 fn premier_plan_a(fenetres: &Sortie, processus: &str) -> bool {
@@ -97,7 +78,7 @@ fn activer_une_fenetre_d_arriere_plan() {
 fn activer_restaure_une_fenetre_reduite() {
     let appli = lancer_appli("appli-essai", &["--reduite"]);
     assert!(
-        attendre_que(DELAI, || est_reduite(appli.pid)),
+        sonder(DELAI, || est_reduite(appli.pid)),
         "la fenêtre n'est pas réduite au départ"
     );
     let profil = Profil::neuf("reduite");
@@ -170,8 +151,13 @@ fn taper_refuse_quand_une_autre_fenetre_vole_le_premier_plan() {
         None,
     );
     eprintln!("durée du taper : {} ms", t.duree.as_millis());
-    // La dernière ligne du voleur, `vole` ou `vol manqué`, se guette ; le jugement suit.
+    // La dernière ligne du voleur, `vole` ou `vol manqué`, se guette. `vole` s'écrit dans les 20 ms
+    // du vol, au pas du voleur ; une touche partie vers lui juste après le dernier contrôle du
+    // premier plan ne s'écrit qu'après son `keydown`, l'IPC de la WebView2 et la boucle de sa
+    // fenêtre. Le calme la laisse arriver avant que les lignes du voleur se jugent ; la valeur
+    // reçue par l'application se lit ensuite.
     voleur.attendre("vol", DELAI);
+    thread::sleep(CALME);
     let du_voleur = voleur.lignes();
     assert!(
         du_voleur.iter().any(|l| l == "vole") && !du_voleur.iter().any(|l| l == "vol manqué"),
@@ -191,7 +177,6 @@ fn taper_refuse_quand_une_autre_fenetre_vole_le_premier_plan() {
         .and_then(|k| k.parse().ok())
         .unwrap_or_else(|| panic!("message inattendu : {message}"));
     assert!(parties < 10_000, "{message}");
-    thread::sleep(CALME);
     let recue = appli.derniere_saisie("champ").unwrap_or_default();
     assert!(
         recue.chars().count() <= parties,
@@ -272,7 +257,7 @@ fn touche_avec_une_liste_ouverte_vise_la_fenetre_principale() {
     );
     assert_eq!(o.code, 0, "{}", o.message());
     assert!(
-        attendre_que(DELAI, || fenetre_sans_titre_de("msedgewebview2")),
+        sonder(DELAI, || fenetre_sans_titre_de("msedgewebview2")),
         "la liste ouverte ne paraît pas comme une fenêtre de msedgewebview2"
     );
     let e = pilote(
@@ -282,7 +267,7 @@ fn touche_avec_une_liste_ouverte_vise_la_fenetre_principale() {
     );
     assert_eq!(e.code, 0, "{}", e.message());
     assert!(
-        attendre_que(DELAI, || !fenetre_sans_titre_de("msedgewebview2")),
+        sonder(DELAI, || !fenetre_sans_titre_de("msedgewebview2")),
         "la liste est restée ouverte"
     );
 }
@@ -353,7 +338,7 @@ fn parametres_reduits_restent_refuses() {
     let s = shell(Shell::Powershell51, "start ms-settings:", &profil);
     assert_eq!(s.code, 0, "{}", s.message());
     let mut lu = None;
-    attendre_que(PARAMETRES_MAX, || {
+    sonder(PARAMETRES_MAX, || {
         lu = reduire_les_parametres();
         lu.is_some()
     });
