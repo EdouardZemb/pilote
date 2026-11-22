@@ -9,11 +9,17 @@
 //! (`use std::fmt;`). Il ne ferme ni les alias (`use std as s;`), ni les blancs dans un chemin
 //! (`std :: fs`) : la relecture de chaque tâche du domaine les ferme.
 
+pub mod bureau;
 pub mod cli;
+#[cfg(test)]
+pub mod faux;
 pub mod fenetre;
+pub mod gestes;
 pub mod journal;
 pub mod processus;
 pub mod refus;
 pub mod sortie;
 pub mod texte;
 pub mod touches;
+
+pub use gestes::executer;
