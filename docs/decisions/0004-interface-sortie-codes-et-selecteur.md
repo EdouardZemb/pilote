@@ -1,6 +1,6 @@
 # ADR-0004 — L'interface : une ligne par résultat, des codes de sortie fixes, un sélecteur exact
 
-- **Statut** : accepté le 2026-11-21
+- **Statut** : remplacé par ADR-0006 le 2026-11-21
 - **Contexte amont** : [le brief](../00-brief-initial.md) (§ 6, les contraintes du poste) ; le design du 2026-11-21, hors du dépôt, ses sections « Ce que fait l'outil » et « Les règles fines » ; [le cadrage](../cadrage.md) (§ 1 et 3, et § 2, questions 1 et 3 à 6) ; [ADR-0001](0001-executable-rust-a-sous-commandes.md)
 
 ## Contexte

@@ -21,7 +21,7 @@ jobs:
 
   verifier:
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # provisoire : mesuré à la Tâche 12
+    timeout-minutes: 5 # 5 min au moins : deux fois 26 s, le plus long passage du 22/11/2026, donnerait 1 min
     permissions:
       contents: read
     steps:
@@ -50,7 +50,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    timeout-minutes: 40 # provisoire : mesuré à la Tâche 12
+    timeout-minutes: 9 # deux fois 4 min 03 s, le passage à froid du 22/11/2026
     permissions:
       contents: read
     steps:
@@ -144,7 +144,7 @@ jobs:
   mutants:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 60 # provisoire : mesuré à la Tâche 12
+    timeout-minutes: 18 # deux fois 8 min 49 s, le plus long passage du 22/11/2026
     permissions:
       contents: read
     steps:

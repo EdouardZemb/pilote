@@ -10,7 +10,7 @@ permissions:
 jobs:
   mutants:
     runs-on: ubuntu-latest
-    timeout-minutes: 60 # provisoire : celui du job mutants, puis mesuré après la fusion
+    timeout-minutes: 18 # celui du job mutants de ci.yml, repris tel quel ; mesuré à froid après la fusion
     permissions:
       contents: read
     steps:

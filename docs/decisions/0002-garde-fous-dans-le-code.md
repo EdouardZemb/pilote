@@ -1,6 +1,6 @@
 # ADR-0002 — Les garde-fous : dans le code, sans aucun fichier de réglage
 
-- **Statut** : accepté le 2026-11-21
+- **Statut** : remplacé par ADR-0005 le 2026-11-21
 - **Contexte amont** : les décisions 5 et 9 à 12 et les anti-buts, dans [le brief](../00-brief-initial.md) (§ 6) ; le design du 2026-11-21, hors du dépôt, ses sections « Les garde-fous », « Les règles fines » et « Les choix de la session de pupitre » ; [le cadrage](../cadrage.md) (§ 1, et § 2, questions 13, 14 et 16)
 
 ## Contexte
