@@ -32,6 +32,10 @@ use std::time::Duration;
 /// Le plus long que les Paramètres mettent à ouvrir leur fenêtre.
 const PARAMETRES_MAX: Duration = Duration::from_secs(15);
 
+/// La saisie de l'application à laquelle le voleur prend le premier plan : avant elle, au moins
+/// autant d'unités sont parties.
+const SAISIES_AVANT_LE_VOL: usize = 100;
+
 /// Le message du refus de KeePassXC (décision 3).
 const KEEPASSXC: &str = "KeePassXC : touche et taper sont refusés dans cette version";
 
@@ -49,7 +53,7 @@ fn premier_plan_a(fenetres: &Sortie, processus: &str) -> bool {
 
 /// Vrai si l'application a reçu un `keydown`.
 fn a_recu_une_touche(appli: &Appli) -> bool {
-    appli.evenements().iter().any(|e| e.genre == "touche")
+    appli.lire_evenements().iter().any(|e| e.genre == "touche")
 }
 
 /// `activer` porte au premier plan une fenêtre d'arrière-plan, celle d'une copie puis celle de
@@ -118,7 +122,8 @@ fn activer_puis_taper_ne_perd_aucun_caractere() {
 /// Une autre fenêtre prend le premier plan au milieu d'une frappe de 10 000 caractères : la frappe
 /// s'arrête en 1, le message compte les unités parties, et rien ne va au voleur. Le voleur part de
 /// la 100e saisie que reçoit l'application, qui renouvelle son droit de céder le premier plan à
-/// chaque `keydown`. La durée du `taper` s'écrit sur la sortie d'erreur.
+/// chaque `keydown` : 100 unités au moins sont donc parties, et moins de 10 000. La durée du
+/// `taper` s'écrit sur la sortie d'erreur.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn taper_refuse_quand_une_autre_fenetre_vole_le_premier_plan() {
@@ -131,7 +136,14 @@ fn taper_refuse_quand_une_autre_fenetre_vole_le_premier_plan() {
         .to_str()
         .expect("un chemin en Unicode")
         .to_string();
-    let voleur = lancer_appli("voleur", &["--voler-premier-plan", &cible, "100"]);
+    let voleur = lancer_appli(
+        "voleur",
+        &[
+            "--voler-premier-plan",
+            &cible,
+            &SAISIES_AVANT_LE_VOL.to_string(),
+        ],
+    );
     let profil = Profil::neuf("vol");
     let a = pilote(&profil, &["activer", "--fenetre", "appli-essai"], None);
     assert_eq!(a.code, 0, "{}", a.message());
@@ -177,6 +189,11 @@ fn taper_refuse_quand_une_autre_fenetre_vole_le_premier_plan() {
         .and_then(|k| k.parse().ok())
         .unwrap_or_else(|| panic!("message inattendu : {message}"));
     assert!(parties < 10_000, "{message}");
+    assert!(
+        parties >= SAISIES_AVANT_LE_VOL,
+        "{parties} unités parties, moins que les {SAISIES_AVANT_LE_VOL} saisies reçues avant le \
+         vol : {message}"
+    );
     let recue = appli.derniere_saisie("champ").unwrap_or_default();
     assert!(
         recue.chars().count() <= parties,
@@ -230,7 +247,7 @@ fn deux_fenetres_titrees_sans_option_titre_sortent_en_2() {
         appli.lignes()
     );
     thread::sleep(CALME);
-    let e = appli.evenements();
+    let e = appli.lire_evenements();
     assert!(
         e.iter()
             .any(|e| e.titre == "Appli d'essai" && e.genre == "touche" && e.key == "Tab"),
@@ -244,12 +261,19 @@ fn deux_fenetres_titrees_sans_option_titre_sortent_en_2() {
 }
 
 /// Une liste ouverte paraît comme une fenêtre sans titre de la WebView2 : elle ne compte pas parmi
-/// les fenêtres de l'application, et Échap, qui la ferme, va à la fenêtre principale.
+/// les fenêtres de l'application, et Échap, qui la ferme, va à la fenêtre principale. Seuls les
+/// `msedgewebview2` de l'arbre de l'application comptent, et aucune telle fenêtre ne paraît avant
+/// `Alt+Bas` : c'est bien la liste que l'essai voit s'ouvrir.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn touche_avec_une_liste_ouverte_vise_la_fenetre_principale() {
-    let _appli = lancer_appli("appli-essai", &["--focus", "liste"]);
+    let appli = lancer_appli("appli-essai", &["--focus", "liste"]);
     let profil = Profil::neuf("liste");
+    let liste_ouverte = || fenetre_sans_titre_de("msedgewebview2", appli.pid);
+    assert!(
+        sonder(DELAI, || !liste_ouverte()),
+        "une fenêtre sans titre de msedgewebview2 paraît dans l'appli avant Alt+Bas"
+    );
     let o = pilote(
         &profil,
         &["touche", "--fenetre", "appli-essai", "Alt+Bas"],
@@ -257,7 +281,7 @@ fn touche_avec_une_liste_ouverte_vise_la_fenetre_principale() {
     );
     assert_eq!(o.code, 0, "{}", o.message());
     assert!(
-        sonder(DELAI, || fenetre_sans_titre_de("msedgewebview2")),
+        sonder(DELAI, liste_ouverte),
         "la liste ouverte ne paraît pas comme une fenêtre de msedgewebview2"
     );
     let e = pilote(
@@ -267,7 +291,7 @@ fn touche_avec_une_liste_ouverte_vise_la_fenetre_principale() {
     );
     assert_eq!(e.code, 0, "{}", e.message());
     assert!(
-        sonder(DELAI, || !fenetre_sans_titre_de("msedgewebview2")),
+        sonder(DELAI, || !liste_ouverte()),
         "la liste est restée ouverte"
     );
 }
@@ -329,21 +353,24 @@ fn copie_keepassxc_refuse_taper_et_touche() {
 }
 
 /// Les vrais Paramètres, réduits, restent refusés : leur cadre réduit ne garde que ses propres
-/// filles, et son AUMID ou l'absence d'enfant lisible le refuse. Le code reçu et la sortie de
-/// `fenetres` s'écrivent sur la sortie d'erreur.
+/// filles, et son AUMID ou l'absence d'enfant lisible le refuse. Le cadre doit être encore réduit
+/// juste avant `activer` : sinon l'enfant `SystemSettings` refuserait seul, et l'essai ne
+/// prouverait rien du cadre réduit. Cet état, le code reçu et la sortie de `fenetres` s'écrivent
+/// sur la sortie d'erreur. La garde des Paramètres les ferme à la fin, essai en échec compris.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn parametres_reduits_restent_refuses() {
     let profil = Profil::neuf("parametres");
     let s = shell(Shell::Powershell51, "start ms-settings:", &profil);
     assert_eq!(s.code, 0, "{}", s.message());
-    let mut lu = None;
+    let mut lus = None;
     sonder(PARAMETRES_MAX, || {
-        lu = reduire_les_parametres();
-        lu.is_some()
+        lus = reduire_les_parametres();
+        lus.is_some()
     });
-    let titre = lu.expect("le runner n'a pas ouvert les Paramètres en 15 s");
-    let chevrons = format!("<{}>", echapper(&titre));
+    let parametres = lus.expect("le runner n'a pas ouvert les Paramètres en 15 s");
+    let chevrons = format!("<{}>", echapper(&parametres.titre));
+    let reduit = parametres.est_reduit();
     let a = pilote(
         &profil,
         &["activer", "--fenetre", "ApplicationFrameHost"],
@@ -351,9 +378,15 @@ fn parametres_reduits_restent_refuses() {
     );
     let f = pilote(&profil, &["fenetres"], None);
     eprintln!(
-        "activer --fenetre ApplicationFrameHost : {} ; fenetres : {:?}",
+        "cadre réduit avant activer : {reduit} ; activer --fenetre ApplicationFrameHost : {} ; \
+         fenetres : {:?}",
         a.code,
         f.lignes()
+    );
+    assert!(
+        reduit,
+        "le cadre des Paramètres n'était plus réduit avant activer : l'essai ne prouverait rien \
+         du cadre réduit"
     );
     match a.code {
         1 => assert_eq!(a.message(), SYSTEMSETTINGS),

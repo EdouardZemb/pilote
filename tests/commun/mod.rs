@@ -12,6 +12,8 @@
     reason = "chaque fichier d'essai n'emploie qu'une partie du module commun"
 )]
 
+use pilote::domaine::processus::Processus;
+use pilote::domaine::processus::arbre;
 use pilote::domaine::refus::AUMID_PARAMETRES;
 use pilote::domaine::refus::CLASSE_CADRE;
 use std::ffi::OsString;
@@ -31,15 +33,24 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::Foundation::ERROR_NO_MORE_FILES;
+use windows::Win32::Foundation::FILETIME;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Foundation::LPARAM;
+use windows::Win32::Foundation::WPARAM;
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
 use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
 use windows::Win32::System::Com::CoInitializeEx;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
+use windows::Win32::System::Diagnostics::ToolHelp::CreateToolhelp32Snapshot;
+use windows::Win32::System::Diagnostics::ToolHelp::PROCESSENTRY32W;
+use windows::Win32::System::Diagnostics::ToolHelp::Process32FirstW;
+use windows::Win32::System::Diagnostics::ToolHelp::Process32NextW;
+use windows::Win32::System::Diagnostics::ToolHelp::TH32CS_SNAPPROCESS;
+use windows::Win32::System::Threading::GetProcessTimes;
 use windows::Win32::System::Threading::OpenMutexW;
 use windows::Win32::System::Threading::OpenProcess;
 use windows::Win32::System::Threading::PROCESS_NAME_WIN32;
@@ -70,8 +81,10 @@ use windows::Win32::UI::WindowsAndMessaging::GetWindowTextW;
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 use windows::Win32::UI::WindowsAndMessaging::IsIconic;
 use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows::Win32::UI::WindowsAndMessaging::SW_MINIMIZE;
 use windows::Win32::UI::WindowsAndMessaging::ShowWindow;
+use windows::Win32::UI::WindowsAndMessaging::WM_CLOSE;
 use windows::core::BOOL;
 use windows::core::PWSTR;
 use windows::core::w;
@@ -127,8 +140,10 @@ pub fn exiger_la_ci() {
 }
 
 /// Un dossier neuf, `%RUNNER_TEMP%\pilote-essais\<nom>-<pid>-<n>`, `<pid>` celui des essais et
-/// `<n>` le rang de l'appel : vidé s'il existait, puis créé. L'étape de dépôt de la CI emporte
-/// `pilote-essais` quand un essai échoue.
+/// `<n>` le rang de l'appel : vidé s'il existait, puis créé. Quand un essai échoue ou que le job est
+/// annulé, l'étape de dépôt de la CI emporte les fichiers de diagnostic de chaque dossier :
+/// `evenements.txt`, `verrou.txt`, `erreur.txt`, `activer.txt` et le journal de `pilote`. Un
+/// fichier de diagnostic neuf ne part que si cette étape le nomme.
 pub fn dossier_jetable(nom: &str) -> PathBuf {
     exiger_la_ci();
     let racine = std::env::var_os("RUNNER_TEMP").expect("RUNNER_TEMP manque");
@@ -215,8 +230,13 @@ fn fichier_d_erreur(profil: &Profil) -> Stdio {
 
 /// Vrai si `critere` devient vrai avant `delai`, sondé tout de suite, puis toutes les 50 ms, puis
 /// une dernière fois à la borne.
-pub fn sonder(delai: Duration, mut critere: impl FnMut() -> bool) -> bool {
+pub fn sonder(delai: Duration, critere: impl FnMut() -> bool) -> bool {
     exiger_la_ci();
+    sonder_sans_exiger(delai, critere)
+}
+
+/// Le sondage de `sonder`, sans `exiger_la_ci` : un `Drop` s'en sert, qui ne doit jamais paniquer.
+fn sonder_sans_exiger(delai: Duration, mut critere: impl FnMut() -> bool) -> bool {
     let debut = Instant::now();
     loop {
         if critere() {
@@ -261,8 +281,9 @@ impl Appli {
             .unwrap_or_default()
     }
 
-    /// Les événements de la page, dans l'ordre du fichier : chaque ligne `<titre>\t<JSON>`, lue.
-    pub fn evenements(&self) -> Vec<Evenement> {
+    /// Les événements de la page, dans l'ordre du fichier `evenements` : chaque ligne
+    /// `<titre>\t<JSON>`, lue maintenant.
+    pub fn lire_evenements(&self) -> Vec<Evenement> {
         exiger_la_ci();
         self.lignes()
             .iter()
@@ -273,7 +294,7 @@ impl Appli {
     /// La valeur de la dernière saisie de l'élément `id`, s'il en a reçu une.
     pub fn derniere_saisie(&self, id: &str) -> Option<String> {
         exiger_la_ci();
-        self.evenements()
+        self.lire_evenements()
             .into_iter()
             .rev()
             .find(|e| e.genre == "saisie" && e.id == id)
@@ -617,10 +638,18 @@ fn executer(mut commande: Command, entree: Option<&[u8]>) -> Sortie {
 /// cet ordre, chacune avec sa panique : `pilote activer` sort en 0 ; le premier plan est à
 /// l'application ; une fenêtre y est focalisée ; elle est à `msedgewebview2.exe`, dont le fil donne
 /// la disposition (décision 2) ; et cette disposition est 0x040C040C, où `@` et `/` sont à leur
-/// place. La fenêtre focalisée passe dans la WebView2 un instant après l'activation : la troisième
-/// et la quatrième preuve se sondent, 2 s au plus. `Set-WinUserLanguageList` ne dit pas quand la
-/// disposition vaut pour les processus lancés ensuite : les essais du clavier l'exigent avant de
-/// juger.
+/// place.
+///
+/// La fenêtre focalisée passe dans la WebView2 un instant après l'activation : la troisième et la
+/// quatrième preuve se sondent, 2 s au plus. Chaque pas relit aussi le premier plan, qui doit
+/// rester à l'application : `GetGUIThreadInfo(0)` lit le fil au premier plan, et un
+/// `msedgewebview2.exe` focalisé ailleurs ne dirait rien de la disposition de l'application. Chaque
+/// pas exige enfin un fil lisible pour la fenêtre focalisée : celle-ci peut disparaître entre deux
+/// lectures, et `GetKeyboardLayout(0)` lirait alors la disposition du fil de l'essai. La panique de
+/// la sonde dit ce qui manquait à son dernier pas, dans l'ordre des preuves.
+///
+/// `Set-WinUserLanguageList` ne dit pas quand la disposition vaut pour les processus lancés
+/// ensuite : les essais du clavier l'exigent avant de juger.
 pub fn exiger_la_disposition_francaise(appli: &Appli, profil: &Profil) {
     exiger_la_ci();
     let activer = pilote(profil, &["activer", "--fenetre", &appli.nom], None);
@@ -637,22 +666,34 @@ pub fn exiger_la_disposition_francaise(appli: &Appli, profil: &Profil) {
         "premier plan sur le PID {premier_plan}, pas sur l'appli {}",
         appli.pid
     );
-    let mut focus = HWND::default();
-    let dans_la_webview2 = sonder(FOCUS_MAX, || {
-        focus = fenetre_focalisee();
-        !focus.is_invalid()
-            && nom_du_processus(pid_de(focus)).is_some_and(|n| n.eq_ignore_ascii_case(WEBVIEW2))
+    let mut lu = Focus::lire();
+    let pret = sonder(FOCUS_MAX, || {
+        lu = Focus::lire();
+        lu.premier_plan == appli.pid && lu.fil != 0 && lu.dans_la_webview2()
     });
-    assert!(!focus.is_invalid(), "aucune fenêtre focalisée dans l'appli");
-    assert!(
-        dans_la_webview2,
-        "fenêtre focalisée hors de msedgewebview2 : {} {}",
-        classe(focus),
-        nom_du_processus(pid_de(focus)).unwrap_or_default()
-    );
-    // SAFETY: lectures d'une fenêtre, de la disposition de son fil, puis de cette disposition.
-    let fil = unsafe { GetWindowThreadProcessId(focus, None) };
-    let hkl = unsafe { GetKeyboardLayout(fil) };
+    if !pret {
+        assert!(
+            lu.premier_plan == appli.pid,
+            "premier plan sur le PID {}, pas sur l'appli {}",
+            lu.premier_plan,
+            appli.pid
+        );
+        assert!(
+            !lu.fenetre.is_invalid(),
+            "aucune fenêtre focalisée dans l'appli"
+        );
+        assert!(
+            lu.fil != 0,
+            "fenêtre focalisée disparue : son fil ne se lit plus"
+        );
+        panic!(
+            "fenêtre focalisée hors de msedgewebview2 : {} {}",
+            lu.classe,
+            lu.processus.unwrap_or_default()
+        );
+    }
+    // SAFETY: lectures de la disposition d'un fil non nul, puis de cette disposition.
+    let hkl = unsafe { GetKeyboardLayout(lu.fil) };
     let arobase = unsafe { VkKeyScanExW(u16::from(b'@'), hkl) };
     let barre = unsafe { VkKeyScanExW(u16::from(b'/'), hkl) };
     let disposition = hkl.0 as usize;
@@ -664,6 +705,48 @@ pub fn exiger_la_disposition_francaise(appli: &Appli, profil: &Profil) {
     );
 }
 
+/// Le focus, lu d'un trait : le PID au premier plan, la fenêtre focalisée du fil au premier plan
+/// (nulle si elle ne se lit pas), son fil et son processus, lus d'un même appel (0 et `None` si
+/// elle n'existe plus), et sa classe.
+struct Focus {
+    premier_plan: u32,
+    fenetre: HWND,
+    fil: u32,
+    processus: Option<String>,
+    classe: String,
+}
+
+impl Focus {
+    /// Le focus tel qu'il est maintenant.
+    fn lire() -> Focus {
+        // SAFETY: `GetForegroundWindow` ne prend rien.
+        let premier_plan = pid_de(unsafe { GetForegroundWindow() });
+        let fenetre = fenetre_focalisee();
+        let mut pid = 0u32;
+        // SAFETY: `pid` vit le temps de l'appel ; une fenêtre nulle ou détruite rend 0 pour les
+        // deux.
+        let fil = unsafe { GetWindowThreadProcessId(fenetre, Some(&raw mut pid)) };
+        Focus {
+            premier_plan,
+            fenetre,
+            fil,
+            processus: if pid == 0 {
+                None
+            } else {
+                nom_du_processus(pid)
+            },
+            classe: classe(fenetre),
+        }
+    }
+
+    /// Vrai si la fenêtre focalisée est à `msedgewebview2.exe`.
+    fn dans_la_webview2(&self) -> bool {
+        self.processus
+            .as_deref()
+            .is_some_and(|n| n.eq_ignore_ascii_case(WEBVIEW2))
+    }
+}
+
 /// Vrai si une fenêtre de premier niveau du processus `pid`, visible et titrée, est réduite.
 pub fn est_reduite(pid: u32) -> bool {
     exiger_la_ci();
@@ -673,11 +756,39 @@ pub fn est_reduite(pid: u32) -> bool {
     })
 }
 
+/// Le cadre des Paramètres, réduit, et son titre lu avant la réduction. `Drop` les ferme
+/// (`WM_CLOSE`, posté sans attendre de réponse) : les Paramètres ne restent pas ouverts pour les
+/// essais suivants, même quand l'essai échoue.
+pub struct Parametres {
+    pub titre: String,
+    cadre: HWND,
+}
+
+impl Parametres {
+    /// Vrai si le cadre est réduit (`IsIconic`), lu maintenant.
+    pub fn est_reduit(&self) -> bool {
+        exiger_la_ci();
+        // SAFETY: lecture d'une fenêtre ; une fenêtre détruite depuis rend faux.
+        unsafe { IsIconic(self.cadre) }.as_bool()
+    }
+}
+
+impl Drop for Parametres {
+    fn drop(&mut self) {
+        // SAFETY: un message posté à une fenêtre détruite depuis échoue, sans suite.
+        let _ = unsafe { PostMessageW(Some(self.cadre), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+    }
+}
+
 /// Trouve le cadre des Paramètres, une fenêtre de premier niveau visible et titrée de classe
 /// `ApplicationFrameWindow`, par son AUMID ou par son enfant `SystemSettings.exe`, qui se détache
-/// une fois le cadre réduit ; lit son titre, le réduit (`ShowWindow`, `SW_MINIMIZE`), et rend ce
-/// titre. `None` s'il ne le trouve pas.
-pub fn reduire_les_parametres() -> Option<String> {
+/// une fois le cadre réduit ; lit son titre, puis le réduit (`ShowWindow`, `SW_MINIMIZE`). Le
+/// retour de `ShowWindow` ne dit pas la réduction, et des Paramètres qui finissent leur lancement
+/// peuvent se restaurer : `IsIconic` se sonde, 5 s au plus, et chaque pas où le cadre n'est pas
+/// réduit redemande la réduction. Rend le cadre réduit et son titre ; `None` s'il ne le trouve pas.
+/// Panique si le cadre ne se réduit pas en 5 s ; sa garde, née dès qu'il est trouvé, le ferme
+/// alors aussi.
+pub fn reduire_les_parametres() -> Option<Parametres> {
     exiger_la_ci();
     // L'AUMID se lit par une interface COM, qui demande COM sur ce fil ; S_FALSE et
     // RPC_E_CHANGED_MODE disent COM déjà là, et un échec laisse l'AUMID illisible.
@@ -692,62 +803,175 @@ pub fn reduire_les_parametres() -> Option<String> {
                     nom_du_processus(pid_de(e)).is_some_and(|n| n.eq_ignore_ascii_case(PARAMETRES))
                 }))
     })?;
-    let lu = titre(cadre);
-    // SAFETY: une fenêtre détruite depuis rend faux, sans suite.
+    let parametres = Parametres {
+        titre: titre(cadre),
+        cadre,
+    };
+    // SAFETY: une fenêtre détruite depuis rend faux, sans suite ; `IsIconic` la lit de même.
     let _ = unsafe { ShowWindow(cadre, SW_MINIMIZE) };
-    Some(lu)
+    let reduit = sonder(DELAI, || {
+        let reduit = unsafe { IsIconic(cadre) }.as_bool();
+        if !reduit {
+            let _ = unsafe { ShowWindow(cadre, SW_MINIMIZE) };
+        }
+        reduit
+    });
+    assert!(
+        reduit,
+        "le cadre des Paramètres « {} » ne se réduit pas en 5 s",
+        parametres.titre
+    );
+    Some(parametres)
 }
 
-/// Vrai si une fenêtre de premier niveau visible et sans titre est au processus `processus`, nommé
-/// sans `.exe` : une liste déroulante ouverte dans la WebView2 en est une.
-pub fn fenetre_sans_titre_de(processus: &str) -> bool {
+/// Vrai si une fenêtre de premier niveau visible et sans titre est à un processus `processus`,
+/// nommé sans `.exe`, de l'arbre de `racine` : une liste déroulante ouverte dans la WebView2 de
+/// l'application en est une. L'arbre borne la recherche : un `msedgewebview2.exe` d'une autre
+/// application ne compte pas. Il est celui du domaine, qui écarte un PID repris par l'heure de
+/// création.
+pub fn fenetre_sans_titre_de(processus: &str, racine: u32) -> bool {
     exiger_la_ci();
     let exe = format!("{processus}.exe");
+    let arbre = arbre(&[racine], &instantane());
     fenetres_de_premier_niveau().into_iter().any(|h| {
+        let pid = pid_de(h);
         visible(h)
             && titre(h).is_empty()
-            && nom_du_processus(pid_de(h)).is_some_and(|n| n.eq_ignore_ascii_case(&exe))
+            && arbre.contains(&pid)
+            && nom_du_processus(pid).is_some_and(|n| n.eq_ignore_ascii_case(&exe))
     })
 }
 
-/// Verr. Maj allumée le temps d'un essai : `Drop` l'éteint.
+/// Les processus du poste, chacun avec son parent, le nom de son exécutable et son heure de
+/// création (`CreateToolhelp32Snapshot`). La fin du parcours arrive en `ERROR_NO_MORE_FILES` ;
+/// toute autre erreur panique, car un instantané tronqué cacherait un processus de l'arbre.
+fn instantane() -> Vec<Processus> {
+    // SAFETY: l'instantané se ferme sur tous les chemins ; `entree` porte sa taille dans `dwSize`,
+    // comme `Process32FirstW` l'exige.
+    let liste = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
+        .unwrap_or_else(|e| panic!("CreateToolhelp32Snapshot : {e}"));
+    let mut entree = PROCESSENTRY32W {
+        dwSize: u32::try_from(size_of::<PROCESSENTRY32W>()).expect("la taille de PROCESSENTRY32W"),
+        ..Default::default()
+    };
+    let mut lus = Vec::new();
+    let mut suite = unsafe { Process32FirstW(liste, &raw mut entree) };
+    let fin = loop {
+        if let Err(e) = suite {
+            break e;
+        }
+        let nom = &entree.szExeFile;
+        let longueur = nom.iter().position(|&c| c == 0).unwrap_or(nom.len());
+        lus.push(Processus {
+            pid: entree.th32ProcessID,
+            parent: entree.th32ParentProcessID,
+            nom: String::from_utf16_lossy(&nom[..longueur]),
+            creation: creation(entree.th32ProcessID),
+        });
+        suite = unsafe { Process32NextW(liste, &raw mut entree) };
+    };
+    let _ = unsafe { CloseHandle(liste) };
+    assert!(
+        fin.code() == ERROR_NO_MORE_FILES.to_hresult(),
+        "instantané des processus tronqué : {fin}"
+    );
+    lus
+}
+
+/// L'heure de création du processus `pid`, en intervalles de 100 ns depuis 1601 ; `None` s'il ne
+/// s'ouvre pas ou que l'heure ne se lit pas.
+fn creation(pid: u32) -> Option<u64> {
+    // SAFETY: le handle ouvert se ferme sur tous les chemins ; les quatre `FILETIME` vivent le
+    // temps de l'appel.
+    let processus = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let mut temps = [FILETIME::default(); 4];
+    let [naissance, sortie, noyau, utilisateur] = &mut temps;
+    let lu = unsafe { GetProcessTimes(processus, naissance, sortie, noyau, utilisateur) };
+    let _ = unsafe { CloseHandle(processus) };
+    lu.ok()?;
+    Some((u64::from(naissance.dwHighDateTime) << 32) | u64::from(naissance.dwLowDateTime))
+}
+
+/// Verr. Maj allumée le temps d'un essai : `Drop` l'éteint. Les essais suivants qui tapent comme au
+/// clavier refuseraient tous sur « Verr. Maj est allumée », loin de la cause.
 pub struct VerrMaj;
 
 impl VerrMaj {
-    /// Allume Verr. Maj, si elle ne l'est pas, et attend qu'elle le soit, 2 s au plus.
+    /// Allume Verr. Maj, si elle ne l'est pas, et attend qu'elle le soit, 2 s au plus ; panique si
+    /// la frappe n'insère pas ses deux événements ou si la touche ne s'allume pas. La garde naît
+    /// avant la frappe : quand l'une de ces paniques arrive, son `Drop` éteint quand même la
+    /// touche.
     pub fn allumer() -> VerrMaj {
         exiger_la_ci();
+        let garde = VerrMaj;
         if !verr_maj_allumee() {
-            basculer_verr_maj();
+            let inseres = basculer_verr_maj();
+            assert_eq!(
+                inseres, 2,
+                "SendInput n'a inséré que {inseres} événements sur 2 pour allumer Verr. Maj"
+            );
         }
         assert!(
             sonder(VERR_MAJ_MAX, verr_maj_allumee),
             "Verr. Maj ne s'allume pas"
         );
-        VerrMaj
+        garde
     }
 }
 
 impl Drop for VerrMaj {
+    /// Éteint Verr. Maj si elle est allumée, puis attend qu'elle soit éteinte, 2 s au plus. Rien n'y
+    /// panique : une panique pendant le déroulement d'un essai déjà en échec avorterait tout le
+    /// binaire des essais. Une frappe incomplète, une touche encore allumée ou illisible s'écrivent
+    /// sur la sortie d'erreur.
     fn drop(&mut self) {
-        if verr_maj_allumee() {
-            basculer_verr_maj();
+        match lire_verr_maj() {
+            Some(false) => return,
+            Some(true) => {}
+            None => {
+                eprintln!(
+                    "Verr. Maj ne se lit pas : elle reste peut-être allumée, et les essais \
+                     suivants qui tapent comme au clavier refuseraient"
+                );
+                return;
+            }
+        }
+        let inseres = basculer_verr_maj();
+        if inseres != 2 {
+            eprintln!(
+                "SendInput n'a inséré que {inseres} événements sur 2 pour éteindre Verr. Maj"
+            );
+        }
+        if !sonder_sans_exiger(VERR_MAJ_MAX, || lire_verr_maj() == Some(false)) {
+            eprintln!(
+                "Verr. Maj n'est pas éteinte 2 s après sa frappe : les essais suivants qui tapent \
+                 comme au clavier refuseront sur « Verr. Maj est allumée »"
+            );
         }
     }
 }
 
-/// Vrai si Verr. Maj est allumée, lue par `GetKeyState` sur un fil neuf : la file d'entrée d'un fil
-/// naît avec l'état du clavier de ce moment, et celle d'un fil déjà vivant ne le suit qu'en lisant
-/// ses messages, ce que les essais ne font pas.
+/// Vrai si Verr. Maj est allumée ; panique si elle ne se lit pas.
 fn verr_maj_allumee() -> bool {
-    // SAFETY: lecture de l'état d'une touche.
-    thread::spawn(|| unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0)
-        .join()
-        .unwrap_or(false)
+    lire_verr_maj().expect("la lecture de Verr. Maj")
 }
 
-/// Frappe Verr. Maj, enfoncée puis relâchée, d'un seul envoi.
-fn basculer_verr_maj() {
+/// Verr. Maj, lue par `GetKeyState` sur un fil neuf : la file d'entrée d'un fil naît avec l'état du
+/// clavier de ce moment, et celle d'un fil déjà vivant ne le suit qu'en lisant ses messages, ce que
+/// les essais ne font pas. `None` si ce fil ne naît pas ou ne répond pas : la lecture ne panique
+/// jamais.
+fn lire_verr_maj() -> Option<bool> {
+    thread::Builder::new()
+        // SAFETY: lecture de l'état d'une touche.
+        .spawn(|| unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0)
+        .ok()?
+        .join()
+        .ok()
+}
+
+/// Frappe Verr. Maj, enfoncée puis relâchée, d'un seul envoi, et rend le nombre d'événements que
+/// `SendInput` a insérés, 2 quand la frappe est entière.
+fn basculer_verr_maj() -> u32 {
     let touche = |drapeaux: KEYBD_EVENT_FLAGS| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
@@ -761,12 +985,17 @@ fn basculer_verr_maj() {
         },
     };
     let lot = [touche(KEYBD_EVENT_FLAGS(0)), touche(KEYEVENTF_KEYUP)];
-    let taille = i32::try_from(size_of::<INPUT>()).expect("la taille d'un INPUT");
     // SAFETY: chaque `INPUT` porte la variante du clavier que dit son type ; la taille passée est
     // celle d'un `INPUT`.
-    let inseres = unsafe { SendInput(&lot, taille) };
-    assert_eq!(inseres, 2, "SendInput n'a pas frappé Verr. Maj");
+    unsafe { SendInput(&lot, TAILLE_INPUT) }
 }
+
+/// La taille d'un `INPUT`, passée à `SendInput`. La compilation vérifie qu'elle tient dans un
+/// `i32` : la frappe de Verr. Maj, que `Drop` appelle, n'a ainsi aucune conversion qui panique.
+const TAILLE_INPUT: i32 = {
+    assert!(size_of::<INPUT>() <= i32::MAX as usize);
+    size_of::<INPUT>() as i32
+};
 
 /// La fenêtre focalisée du fil au premier plan (`GetGUIThreadInfo`) ; nulle si elle ne se lit pas.
 fn fenetre_focalisee() -> HWND {

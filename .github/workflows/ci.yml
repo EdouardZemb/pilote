@@ -55,6 +55,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Installer la chaîne de rust-toolchain.toml
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -87,7 +89,9 @@ jobs:
           $env:APPDATA = Join-Path $s 'AppData\Roaming'
           $env:LOCALAPPDATA = Join-Path $s 'AppData\Local'
           $env:PILOTE_SENTINELLE = $s
-          cargo test --workspace -- --include-ignored --test-threads=1
+          # --show-output : libtest garde pour lui ce qu'écrit un essai qui passe, dont les durées et
+          # les codes que l'essai écrit sur sa sortie d'erreur pour qu'on les lise ici.
+          cargo test --workspace -- --include-ignored --test-threads=1 --show-output
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $paru = Get-ChildItem -LiteralPath $s -Recurse -File -Force
           if ($paru) { $paru | ForEach-Object { $_.FullName.Substring($s.Length) }; throw 'un fichier a paru dans la sentinelle' }
@@ -115,12 +119,26 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             if ($version -ne "pilote 0.1.0 ($attendu)") { throw "tour ${tour} : « $version », attendu $attendu" }
           }
+      # Un essai figé consomme le délai du job, qui est alors annulé, et failure() seul n'y répond
+      # pas : c'est pourtant là que les fichiers des essais se lisent.
       - name: Déposer les essais
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pilote-essais
-          path: ${{ runner.temp }}/pilote-essais/
+          # Les seuls fichiers de diagnostic que crée le module commun des essais, dans chaque
+          # dossier jetable : les événements de chaque application, ceux du teneur du verrou, leur
+          # sortie d'erreur, l'erreur d'activer écrite par Git Bash et le journal de pilote. Les
+          # données de la WebView2 et les copies de l'exécutable, lourdes et sans diagnostic,
+          # restent exclues même si un motif s'élargit.
+          path: |
+            ${{ runner.temp }}/pilote-essais/*/evenements.txt
+            ${{ runner.temp }}/pilote-essais/*/verrou.txt
+            ${{ runner.temp }}/pilote-essais/*/erreur.txt
+            ${{ runner.temp }}/pilote-essais/*/activer.txt
+            ${{ runner.temp }}/pilote-essais/*/AppData/Local/pilote/journal.tsv
+            !${{ runner.temp }}/pilote-essais/*/webview2/**
+            !${{ runner.temp }}/pilote-essais/**/*.exe
           if-no-files-found: warn
 
   mutants:

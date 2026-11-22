@@ -8,6 +8,7 @@
 
 mod commun;
 
+use commun::Appli;
 use commun::CALME;
 use commun::DELAI;
 use commun::Evenement;
@@ -18,6 +19,7 @@ use commun::exiger_la_disposition_francaise;
 use commun::lancer_appli;
 use commun::pilote;
 use commun::shell;
+use commun::sonder;
 use std::fs;
 use std::thread;
 
@@ -50,6 +52,22 @@ fn rang(
         .skip(debut)
         .find(|(_, e)| critere(e))
         .map(|(i, _)| i)
+}
+
+/// Vrai si, à partir du rang `debut`, la `touche` `key` paraît, puis, après elle, un `focus` de
+/// l'élément `id`, avant 5 s. La page dit le `keydown` à la capture, avant que son raccourci ou
+/// l'action par défaut déplacent le focus : un focus qui suit la touche en vient.
+fn focus_apres_la_touche(appli: &Appli, debut: usize, key: &str, id: &str) -> bool {
+    sonder(DELAI, || {
+        let evenements = appli.lire_evenements();
+        rang(&evenements, debut, |e| e.genre == "touche" && e.key == key)
+            .and_then(|touche| {
+                rang(&evenements, touche + 1, |e| {
+                    e.genre == "focus" && e.id == id
+                })
+            })
+            .is_some()
+    })
 }
 
 /// Les lettres accentuées, la ligature, `€` et l'apostrophe partent en UTF-16, telles quelles.
@@ -117,7 +135,7 @@ fn taper_arobase_par_altgr() {
     assert_eq!(appli.derniere_saisie("champ").as_deref(), Some("@"));
     assert!(
         appli
-            .evenements()
+            .lire_evenements()
             .iter()
             .any(|e| e.genre == "touche" && e.code == "Digit0"),
         "{:?}",
@@ -133,7 +151,7 @@ fn touche_barre_declenche_le_raccourci() {
     let appli = lancer_appli("appli-essai", &[]);
     let profil = Profil::neuf("barre");
     exiger_la_disposition_francaise(&appli, &profil);
-    let avant = appli.evenements().len();
+    let avant = appli.lire_evenements().len();
     let s = pilote(
         &profil,
         &["touche", "--fenetre", "appli-essai", "barre"],
@@ -141,14 +159,9 @@ fn touche_barre_declenche_le_raccourci() {
     );
     assert_eq!(s.code, 0, "{}", s.message());
     assert!(
-        appli.attendre("\"genre\":\"focus\",\"id\":\"recherche\"", DELAI),
-        "{:?}",
+        focus_apres_la_touche(&appli, avant, "/", "recherche"),
+        "aucun focus de recherche après la touche « / » : {:?}",
         appli.lignes()
-    );
-    let evenements = appli.evenements();
-    assert!(
-        rang(&evenements, avant, |e| e.genre == "touche" && e.key == "/").is_some(),
-        "{evenements:?}"
     );
 }
 
@@ -158,6 +171,7 @@ fn touche_barre_declenche_le_raccourci() {
 fn touche_tab_deplace_le_focus() {
     let appli = lancer_appli("appli-essai", &[]);
     let profil = Profil::neuf("tab");
+    let avant = appli.lire_evenements().len();
     let s = pilote(
         &profil,
         &["touche", "--fenetre", "appli-essai", "Tab"],
@@ -165,8 +179,8 @@ fn touche_tab_deplace_le_focus() {
     );
     assert_eq!(s.code, 0, "{}", s.message());
     assert!(
-        appli.attendre("\"genre\":\"focus\",\"id\":\"champ\"", DELAI),
-        "{:?}",
+        focus_apres_la_touche(&appli, avant, "Tab", "champ"),
+        "aucun focus de champ après la touche Tab : {:?}",
         appli.lignes()
     );
 }
@@ -195,7 +209,7 @@ fn comme_au_clavier_refuse_un_caractere_absent() {
     );
     thread::sleep(CALME);
     assert!(
-        !appli.evenements().iter().any(|e| e.genre == "saisie"),
+        !appli.lire_evenements().iter().any(|e| e.genre == "saisie"),
         "{:?}",
         appli.lignes()
     );
@@ -226,7 +240,7 @@ fn comme_au_clavier_refuse_quand_verr_maj_est_allumee() {
     );
     thread::sleep(CALME);
     assert!(
-        !appli.evenements().iter().any(|e| e.genre == "saisie"),
+        !appli.lire_evenements().iter().any(|e| e.genre == "saisie"),
         "{:?}",
         appli.lignes()
     );
@@ -291,7 +305,7 @@ fn taper_depuis_git_bash_l_entree_standard() {
          --fenetre appli-essai barre && {{ pilote activer --fenetre absent 2>'{f}'; test $? -eq 2; \
          }}"
     );
-    let avant = appli.evenements().len();
+    let avant = appli.lire_evenements().len();
     let s = shell(Shell::GitBash, &script, &profil);
     assert_eq!(
         s.code,
@@ -305,7 +319,7 @@ fn taper_depuis_git_bash_l_entree_standard() {
         "{:?}",
         appli.lignes()
     );
-    let evenements = appli.evenements();
+    let evenements = appli.lire_evenements();
     let saisie = rang(&evenements, avant, |e| {
         e.genre == "saisie" && e.id == "champ" && e.valeur == "été"
     })
