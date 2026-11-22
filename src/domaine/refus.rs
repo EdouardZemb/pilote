@@ -188,9 +188,9 @@ mod tests {
         let t = [p(10, 0, "appli.exe", Some(1))];
         assert_eq!(fenetre_refusee(&f(1, 10, "A"), &t), None);
     }
-    // Les valeurs que fixe le plan, lues par leur texte et non par les constantes : la classe du
-    // cadre et l'AUMID des Paramètres refusent, sans égard à la casse, même quand un enfant lisible
-    // d'un processus permis s'y trouve.
+    // La classe du cadre et l'AUMID des Paramètres, écrits en toutes lettres plutôt que par les
+    // constantes : ils refusent, sans égard à la casse, même quand un enfant lisible d'un processus
+    // permis s'y trouve.
     #[test]
     fn cadre_et_aumid_des_parametres_par_leur_texte() {
         let t = [

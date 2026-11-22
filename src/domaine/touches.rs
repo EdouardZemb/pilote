@@ -721,7 +721,7 @@ mod tests {
         }
     }
 
-    // Chaque touche virtuelle que le plan fixe, par sa valeur.
+    // Chaque constante de touche virtuelle vaut le code que Windows lui donne.
     #[test]
     fn touches_virtuelles_par_leur_valeur() {
         assert_eq!(
