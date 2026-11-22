@@ -211,10 +211,14 @@ compte.
 (1) : elle s'ajouterait à chaque touche frappée. Elle se lit avant l'activation, puis de nouveau
 après elle pour `touche` et `taper`.
 
-**Les touches interdites** feraient sortir la frappe de la fenêtre retenue : la touche Windows, dans
-tout morceau d'une combinaison, Alt+Tab, Ctrl+Alt+Suppr, Alt ou Ctrl avec Echap. Elles se
-reconnaissent à l'analyse, sous toute casse et dans tout ordre, avant tout nom inconnu (1, « touche
-interdite : <touche> »). Alt+F4 reste permis.
+**Les touches interdites** : la touche Windows et ses combinaisons, Ctrl+Alt+Suppr, Alt+Tab, et
+toute touche qui change de fenêtre, qui ferait sortir la frappe de la fenêtre retenue ; Alt+F4 reste
+permis. Sur les noms de touches que l'analyse connaît aujourd'hui, la règle prend cette forme : la
+touche Windows, dans tout morceau d'une combinaison, Alt+Tab, Ctrl+Alt+Suppr, Alt ou Ctrl avec
+Echap. Ces touches se reconnaissent à l'analyse, sous toute casse et dans tout ordre, avant tout nom
+inconnu (1, « touche interdite : <touche> »). Cette liste n'épuise pas la règle : une tranche qui
+ajoute un nom de touche le juge contre elle, et une touche dont on apprend qu'elle change de
+fenêtre rejoint la liste, avec son test.
 
 **Aucun `SetValue`** : un champ se remplit en tapant, et le contrôle statique refuse ce mot dans les
 sources.

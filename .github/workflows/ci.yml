@@ -144,7 +144,7 @@ jobs:
   mutants:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 18 # deux fois 8 min 49 s, le plus long passage du 22/11/2026
+    timeout-minutes: 19 # deux fois 9 min 03 s, le plus long passage du 22/11/2026
     permissions:
       contents: read
     steps:
