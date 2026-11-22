@@ -5,6 +5,15 @@
 //! lit sur le disque chaque `.rs` de `src/`, `tests/` et `essai/appli/src/`. Les règles « dans
 //! `src/` » visent les chemins qui commencent par `src/`, jamais `essai/appli/src/` ni `tests/`.
 //!
+//! Les essais de bout en bout ne tournent jamais sur le poste (décision 13 du plan maître) : chaque
+//! `#[test]` des fichiers d'essai, `tests/essais_*.rs`, porte sur la ligne d'avant l'attribut
+//! `IGNORE_DES_ESSAIS` ; chaque autre `#[test]` de `pilote`, hors du domaine et de ce fichier, un
+//! `#[ignore = …]` ; aucun fichier de `tests/`, hors du module commun des essais et de ce fichier,
+//! ne nomme un mot de lancement ; la couche Windows, `src/bureau/`, n'a aucun test ; et seuls elle,
+//! `src/lib.rs` et ce fichier nomment le poste réel, `BureauWindows`. L'application d'essai, membre
+//! à part qui ne dépend pas de `pilote`, n'est pas tenue aux attributs : ses tests sont des règles
+//! pures, lancées sous Linux comme sous Windows.
+//!
 //! Le contrôle est une recherche dans le texte, pas une analyse de Rust. Il ferme les formes
 //! courantes : les chemins complets (`std::fs::read`), les imports groupés (`use std::{fs, io};`)
 //! et les préfixes nus qu'ils laissent employer (`fs::read`). Il ne ferme ni les alias (`use std
@@ -71,6 +80,11 @@ const MOTS_DU_DOMAINE: &[&str] = &[
     "env::",
 ];
 
+/// Les mots de lancement : aucun fichier de `tests/` ne les nomme, sauf le module commun des essais
+/// et ce fichier. Des préfixes bornés à gauche seulement : `CARGO_BIN_EXE` voit
+/// `CARGO_BIN_EXE_pilote`.
+const MOTS_DE_LANCEMENT: &[&str] = &["CARGO_BIN_EXE", "Command::new", "std::process", "spawn"];
+
 /// Le seul fichier de `src/` qui lit l'horloge et l'environnement, et résout les chemins.
 const SYSTEME: &str = "src/systeme.rs";
 
@@ -80,12 +94,33 @@ const DOMAINE: &str = "src/domaine/";
 /// Ce fichier, le seul qui nomme `SetValue`.
 const STATIQUE: &str = "tests/statique.rs";
 
+/// Le module commun des essais, le seul fichier de `tests/`, avec celui-ci, qui lance un processus.
+const COMMUN: &str = "tests/commun/mod.rs";
+
+/// La couche Windows, qui n'a aucun test.
+const BUREAU: &str = "src/bureau/";
+
+/// Le seul fichier hors de la couche Windows qui crée le poste réel.
+const LIB: &str = "src/lib.rs";
+
+/// Le poste réel, que seuls la couche Windows, `LIB` et ce fichier nomment.
+const BUREAU_REEL: &str = "BureauWindows";
+
+/// L'attribut que porte, sur la ligne d'avant, chaque `#[test]` d'un fichier d'essai.
+const IGNORE_DES_ESSAIS: &str = "#[ignore = \"il pilote le bureau : la CI le lance\"]";
+
+/// Le début de l'attribut que porte, sur la ligne d'avant, chaque autre `#[test]` de `pilote` hors
+/// du domaine et de ce fichier.
+const IGNORE: &str = "#[ignore = ";
+
 /// Les racines lues, depuis la racine du dépôt.
 const RACINES: &[&str] = &["src", "tests", "essai/appli/src"];
 
 /// Les mots que `chemin` ne porte jamais, chacun avec sa sorte (vrai pour un mot entier, faux pour
 /// un préfixe) : dans `src/`, hors de `SYSTEME`, tous les mots entiers et les préfixes sauf
-/// `SetValue` ; dans le domaine, de plus `MOTS_DU_DOMAINE` ; partout sauf ici, `SetValue`.
+/// `SetValue` ; dans le domaine, de plus `MOTS_DU_DOMAINE` ; partout sauf ici, `SetValue` ; dans
+/// `tests/`, hors de `COMMUN` et d'ici, les mots de lancement ; hors de `BUREAU`, de `LIB` et d'ici,
+/// le poste réel.
 fn mots_refuses(chemin: &str) -> Vec<(&'static str, bool)> {
     let mut mots = Vec::new();
     if chemin.starts_with("src/") && chemin != SYSTEME {
@@ -103,7 +138,67 @@ fn mots_refuses(chemin: &str) -> Vec<(&'static str, bool)> {
     if chemin != STATIQUE {
         mots.push((SET_VALUE, true));
     }
+    if chemin.starts_with("tests/") && chemin != COMMUN && chemin != STATIQUE {
+        mots.extend(MOTS_DE_LANCEMENT.iter().map(|mot| (*mot, false)));
+    }
+    if !chemin.starts_with(BUREAU) && chemin != LIB && chemin != STATIQUE {
+        mots.push((BUREAU_REEL, false));
+    }
     mots
+}
+
+/// Vrai si `chemin` est un fichier d'essai, `tests/essais_*.rs`.
+fn est_un_essai(chemin: &str) -> bool {
+    chemin
+        .strip_prefix("tests/essais_")
+        .is_some_and(|reste| reste.ends_with(".rs") && !reste.contains('/'))
+}
+
+/// L'attribut qu'un `#[test]` porte sur la ligne d'avant.
+enum Attribut {
+    /// `IGNORE_DES_ESSAIS`, exactement : un fichier d'essai.
+    DesEssais,
+    /// Un `#[ignore = …]`, de toute raison : le reste de `pilote`, hors du domaine et d'ici.
+    Ignore,
+}
+
+/// L'attribut qu'exige chaque `#[test]` de `chemin` : celui des essais dans un fichier d'essai ; un
+/// `#[ignore = …]` dans le reste de `tests/`, hors d'ici, et dans `src/`, hors du domaine ; aucun
+/// ailleurs (le domaine, ce fichier, l'application d'essai).
+fn attribut_exige(chemin: &str) -> Option<Attribut> {
+    if est_un_essai(chemin) {
+        Some(Attribut::DesEssais)
+    } else if (chemin.starts_with("tests/") && chemin != STATIQUE)
+        || (chemin.starts_with("src/") && !chemin.starts_with(DOMAINE))
+    {
+        Some(Attribut::Ignore)
+    } else {
+        None
+    }
+}
+
+/// Les fautes du `#[test]` de la ligne `numero` de `chemin`, `precedente` étant la ligne d'avant :
+/// l'attribut exigé qui manque, puis, sous la couche Windows, le test lui-même.
+fn fautes_du_test(chemin: &str, numero: usize, precedente: Option<&str>) -> Vec<String> {
+    let mut fautes = Vec::new();
+    let avant = precedente.map(str::trim).unwrap_or_default();
+    match attribut_exige(chemin) {
+        Some(Attribut::DesEssais) if avant != IGNORE_DES_ESSAIS => {
+            fautes.push(format!(
+                "{chemin}:{numero} : #[test] sans {IGNORE_DES_ESSAIS}"
+            ));
+        }
+        Some(Attribut::Ignore) if !avant.starts_with(IGNORE) => {
+            fautes.push(format!("{chemin}:{numero} : #[test] sans #[ignore]"));
+        }
+        _ => {}
+    }
+    if chemin.starts_with(BUREAU) {
+        fautes.push(format!(
+            "{chemin}:{numero} : #[test] dans la couche Windows"
+        ));
+    }
+    fautes
 }
 
 /// Vrai si `c` colle à un nom : une lettre, un chiffre ou `_`.
@@ -125,13 +220,16 @@ fn porte(ligne: &str, mot: &str, entier: bool) -> bool {
 
 /// Les fautes de `sources`, des paires (chemin, texte) nommées depuis la racine du dépôt, les
 /// chemins en `/`. Une ligne dont le début, blancs ôtés, est `//` (commentaire, documentation) ne
-/// compte pas, mais garde son numéro. Chaque faute nomme le fichier, la ligne et le mot, une fois
-/// par ligne et par mot, dans l'ordre de `mots_refuses` : « <chemin>:<ligne> contient « <mot> » ».
+/// compte pas, mais garde son numéro. Chaque faute d'un mot nomme le fichier, la ligne et le mot,
+/// une fois par ligne et par mot, dans l'ordre de `mots_refuses` : « <chemin>:<ligne> contient
+/// « <mot> » ». Une ligne dont le début, blancs ôtés, est `#[test]` porte ensuite les fautes de
+/// `fautes_du_test`, jugées sur la ligne d'avant, telle quelle.
 fn controler(sources: &[(String, String)]) -> Vec<String> {
     let mut fautes = Vec::new();
     for (chemin, texte) in sources {
         let mots = mots_refuses(chemin);
-        for (indice, ligne) in texte.lines().enumerate() {
+        let lignes: Vec<&str> = texte.lines().collect();
+        for (indice, ligne) in lignes.iter().enumerate() {
             if ligne.trim_start().starts_with("//") {
                 continue;
             }
@@ -139,6 +237,10 @@ fn controler(sources: &[(String, String)]) -> Vec<String> {
                 if porte(ligne, mot, *entier) {
                     fautes.push(format!("{chemin}:{} contient « {mot} »", indice + 1));
                 }
+            }
+            if ligne.trim_start().starts_with("#[test]") {
+                let precedente = indice.checked_sub(1).map(|i| lignes[i]);
+                fautes.extend(fautes_du_test(chemin, indice + 1, precedente));
             }
         }
     }
@@ -395,4 +497,81 @@ fn refuse_une_variable_en_chaine_brute() {
 fn la_borne_compte_les_chiffres_et_le_souligne() {
     admet("src/domaine/bureau.rs", "let x2rand = 1;");
     admet("src/domaine/bureau.rs", "let rand_x = 1;");
+}
+
+#[test]
+fn refuse_un_essai_sans_ignore() {
+    refuse(
+        "tests/essais_clavier.rs",
+        "#[test]\nfn a() {}",
+        "tests/essais_clavier.rs:1 : #[test] sans #[ignore = \"il pilote le bureau : la CI le lance\"]",
+    );
+}
+
+#[test]
+fn admet_un_essai_ignore() {
+    admet(
+        "tests/essais_clavier.rs",
+        "#[ignore = \"il pilote le bureau : la CI le lance\"]\n#[test]\nfn a() {}",
+    );
+}
+
+#[test]
+fn refuse_un_test_sans_ignore_hors_du_domaine() {
+    refuse(
+        "src/systeme.rs",
+        "#[test]\nfn a() {}",
+        "src/systeme.rs:1 : #[test] sans #[ignore]",
+    );
+}
+
+#[test]
+fn admet_un_test_ignore_hors_du_domaine() {
+    admet("src/systeme.rs", "#[ignore = \"x\"]\n#[test]\nfn a() {}");
+}
+
+/// L'application d'essai est un membre à part, qui ne dépend pas de `pilote` : ses tests, des
+/// règles pures qui tournent aussi sous Linux, ne peuvent pas appeler la couche Windows réelle.
+#[test]
+fn admet_un_test_de_l_application_d_essai() {
+    admet("essai/appli/src/main.rs", "#[test]\nfn a() {}");
+}
+
+#[test]
+fn chaque_mot_de_lancement_a_sa_plantation() {
+    for mot in MOTS_DE_LANCEMENT {
+        refuse(
+            "tests/autre.rs",
+            &format!("let x = {mot};"),
+            &format!("tests/autre.rs:1 contient « {mot} »"),
+        );
+    }
+    refuse(
+        "tests/essais_gardes.rs",
+        "env!(\"CARGO_BIN_EXE_pilote\")",
+        "tests/essais_gardes.rs:1 contient « CARGO_BIN_EXE »",
+    );
+}
+
+#[test]
+fn admet_un_lancement_dans_le_module_commun() {
+    admet("tests/commun/mod.rs", "Command::new(\"x\")");
+}
+
+#[test]
+fn refuse_un_test_dans_la_couche_windows() {
+    refuse(
+        "src/bureau/clavier.rs",
+        "#[ignore = \"x\"]\n#[test]\nfn a() {}",
+        "src/bureau/clavier.rs:2 : #[test] dans la couche Windows",
+    );
+}
+
+#[test]
+fn refuse_le_bureau_reel_hors_de_sa_place() {
+    refuse(
+        "src/domaine/gestes.rs",
+        "BureauWindows::new()",
+        "src/domaine/gestes.rs:1 contient « BureauWindows »",
+    );
 }

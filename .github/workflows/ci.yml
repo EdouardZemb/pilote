@@ -48,6 +48,81 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40 # provisoire : mesuré à la Tâche 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Installer la chaîne de rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Construire pilote et l'application d'essai
+        run: cargo build -p pilote -p appli-essai
+      - name: La disposition française
+        shell: powershell
+        run: |
+          Set-WinUserLanguageList (New-WinUserLanguageList fr-FR) -Force
+          Set-WinDefaultInputMethodOverride -InputTip '040C:0000040C'
+          Get-WinUserLanguageList
+          Get-WinDefaultInputMethodOverride
+      - name: La sentinelle des chemins de données, puis les essais
+        run: |
+          $cargo = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
+          $rustup = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { Join-Path $env:USERPROFILE '.rustup' }
+          $essai = Join-Path $env:RUNNER_TEMP 'sentinelle-essai'
+          New-Item -ItemType Directory -Force (Join-Path $essai 'a') | Out-Null
+          (New-Item -ItemType File (Join-Path $essai 'a\cache')).Attributes = 'Hidden'
+          if (-not (Get-ChildItem -LiteralPath $essai -Recurse -File -Force)) { throw "l'essai ne voit pas le fichier caché" }
+          $s = Join-Path $env:RUNNER_TEMP 'sentinelle'
+          New-Item -ItemType Directory -Force (Join-Path $s 'AppData\Roaming'), (Join-Path $s 'AppData\Local') | Out-Null
+          $env:CARGO_HOME = $cargo
+          $env:RUSTUP_HOME = $rustup
+          $env:USERPROFILE = $s
+          $env:APPDATA = Join-Path $s 'AppData\Roaming'
+          $env:LOCALAPPDATA = Join-Path $s 'AppData\Local'
+          $env:PILOTE_SENTINELLE = $s
+          cargo test --workspace -- --include-ignored --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $paru = Get-ChildItem -LiteralPath $s -Recurse -File -Force
+          if ($paru) { $paru | ForEach-Object { $_.FullName.Substring($s.Length) }; throw 'un fichier a paru dans la sentinelle' }
+      - name: La version suit le commit
+        run: |
+          $env:CARGO_HOME = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
+          $env:RUSTUP_HOME = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { Join-Path $env:USERPROFILE '.rustup' }
+          $p = Join-Path $env:RUNNER_TEMP 'profil-version'
+          New-Item -ItemType Directory -Force (Join-Path $p 'AppData\Roaming'), (Join-Path $p 'AppData\Local') | Out-Null
+          $env:USERPROFILE = $p
+          $env:APPDATA = Join-Path $p 'AppData\Roaming'
+          $env:LOCALAPPDATA = Join-Path $p 'AppData\Local'
+          git switch -c essai-version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($tour in 1, 2) {
+            git -c user.name=ci -c user.email=ci@invalid commit --allow-empty -m "essai $tour"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Au premier tour, la référence se compacte : le second commit recrée son fichier sans toucher
+            # HEAD ni packed-refs, et seul logs/HEAD le dit à build.rs.
+            if ($tour -eq 1) { git pack-refs --all; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+            cargo build -p pilote
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $attendu = git rev-parse --short=12 HEAD
+            $version = & .\target\debug\pilote.exe --version
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($version -ne "pilote 0.1.0 ($attendu)") { throw "tour ${tour} : « $version », attendu $attendu" }
+          }
+      - name: Déposer les essais
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pilote-essais
+          path: ${{ runner.temp }}/pilote-essais/
+          if-no-files-found: warn
+
   mutants:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
