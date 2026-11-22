@@ -85,6 +85,9 @@ pub struct FauxBureau {
     pub journal_ferme: bool,
     /// Le journal s'ouvre, mais refuse chaque ligne.
     pub ajout_rate: bool,
+    /// Le journal s'ouvre, mais panique à chaque ligne : une panique de la couche Windows pendant
+    /// l'écriture de la ligne finale.
+    pub ajout_panique: bool,
     /// Les processus du poste.
     pub processus: Vec<Processus>,
     /// Les fenêtres de premier niveau.
@@ -161,6 +164,7 @@ impl FauxBureau {
             journal: Vec::new(),
             journal_ferme: false,
             ajout_rate: false,
+            ajout_panique: false,
             processus: vec![p(100, 4, "appli-essai.exe", Some(5))],
             fenetres: vec![f(1, 100, "Appli d'essai")],
             erreur_processus: None,
@@ -281,6 +285,9 @@ impl Bureau for FauxBureau {
     }
     fn ajouter_au_journal(&mut self, ligne: &str) -> Result<(), ErreurSysteme> {
         self.appels.push(AppelFaux::Ajout(ligne.to_string()));
+        if self.ajout_panique {
+            panic!("ajout au journal");
+        }
         if self.ajout_rate {
             return Err(ErreurSysteme("écriture refusée".to_string()));
         }

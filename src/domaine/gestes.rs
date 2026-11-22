@@ -180,14 +180,19 @@ impl Suivi {
 /// Exécute la commande que disent `args`, le nom du programme en tête, et rend son issue. Une
 /// panique se rattrape : sa ligne va au journal au code 3, et l'issue est la seule erreur
 /// « échec du système : panique ». Chaque appel a sa ligne au journal quand il s'ouvre ; une ligne
-/// qu'il refuse après un geste fait sortir en 3, sauf si la commande échouait déjà en 3.
+/// qu'il refuse après un geste fait sortir en 3, sauf si la commande échouait déjà en 3. Une
+/// panique pendant l'écriture de cette ligne se rattrape aussi : la ligne est perdue, comme une
+/// ligne refusée, et aucune panique ne sort d'ici.
 pub fn executer(args: &[OsString], b: &mut dyn Bureau) -> Issue {
-    let sous = sous_commande(args);
     let mut suivi = Suivi::default();
     let issue = catch_unwind(AssertUnwindSafe(|| derouler(args, &mut suivi, &mut *b)))
         .unwrap_or_else(|_| Issue::arret(echec("panique")));
-    let recue = journaliser(sous, issue.code, &suivi, b);
-    if !recue && suivi.agi && issue.code != Code::Echec {
+    let code = issue.code;
+    let recue = catch_unwind(AssertUnwindSafe(|| {
+        journaliser(sous_commande(args), code, &suivi, &mut *b)
+    }))
+    .unwrap_or(false);
+    if !recue && suivi.agi && code != Code::Echec {
         return Issue::arret(echec(LIGNE_PERDUE));
     }
     issue
@@ -1864,5 +1869,56 @@ mod tests {
             Issue::arret(Arret::Echec("échec du système : panique".into()))
         );
         assert_eq!(b.journal, vec![format!("{TETE}touche\t\t3\t\n")]);
+    }
+    // Une panique pendant l'écriture de la ligne finale ne sort pas d'`executer` : la ligne est
+    // perdue, comme un ajout refusé, et après un geste le code est 3.
+    #[test]
+    fn panique_du_journal_apres_un_geste_sort_en_3() {
+        let mut b = FauxBureau::avec_appli();
+        b.ajout_panique = true;
+        assert_eq!(
+            x(&mut b, "touche --fenetre appli-essai Tab"),
+            Issue::arret(Arret::Echec(
+                "échec du système : le journal n'a pas reçu sa ligne".into()
+            ))
+        );
+        assert_eq!(b.envois().len(), 1);
+        assert_eq!(
+            b.appels
+                .iter()
+                .filter(|a| matches!(a, AppelFaux::Ajout(_)))
+                .count(),
+            1
+        );
+        assert!(b.journal.is_empty());
+    }
+    // Sans geste, la panique du journal ne change pas l'issue : l'aide, dont le journal s'ouvre à
+    // la ligne finale, un refus, une lecture et une activation qui n'a rien eu à faire rendent ce
+    // qu'ils rendent quand le journal reçoit sa ligne.
+    #[test]
+    fn panique_du_journal_sans_geste_garde_l_issue() {
+        for s in [
+            "--help",
+            "touche --fenetre appli-essai Alt+Tab",
+            "fenetres",
+            "activer --fenetre appli-essai",
+        ] {
+            let attendue = x(&mut FauxBureau::avec_appli(), s);
+            let mut b = FauxBureau::avec_appli();
+            b.ajout_panique = true;
+            assert_eq!(x(&mut b, s), attendue, "{s}");
+            assert!(appele(&b, |a| matches!(a, AppelFaux::Ajout(_))), "{s}");
+        }
+    }
+    // Une panique du corps, puis celle du journal : l'issue reste la seule erreur de la panique.
+    #[test]
+    fn panique_du_corps_puis_du_journal_garde_son_message() {
+        let mut b = FauxBureau::avec_appli();
+        b.fenetres_panique = true;
+        b.ajout_panique = true;
+        assert_eq!(
+            x(&mut b, "touche --fenetre appli-essai Tab"),
+            Issue::arret(Arret::Echec("échec du système : panique".into()))
+        );
     }
 }
