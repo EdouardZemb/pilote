@@ -59,6 +59,12 @@ const MODIFICATEURS_DE_L_ETAT: [(u8, [VIRTUAL_KEY; 2]); 3] = [
 /// quelques-unes, une ligature comprise.
 const PRODUIT_MAX: usize = 16;
 
+/// L'octet bas du balayage, seul passé à `ToUnicodeEx` : le préfixe 0xE0 d'une touche étendue, que
+/// rend `MAPVK_VK_TO_VSC_EX`, pose le bit 15, que `ToUnicodeEx` lit comme « touche relâchée ». Rien
+/// ne serait produit, et un caractère qu'une disposition ne place que sur une touche étendue (la
+/// barre oblique du pavé numérique, 0xE035) refuserait à tort.
+const OCTET_BAS: u32 = 0xFF;
+
 /// La disposition du clavier du fil focalisé, relue à chaque appel : la fenêtre focalisée, à
 /// défaut l'active (`GetGUIThreadInfo` du fil au premier plan), à défaut celle du premier plan
 /// (`fil_focalise`), puis la disposition de son fil (`GetKeyboardLayout`). `None` quand aucune
@@ -101,8 +107,9 @@ pub fn scan(unite: u16) -> i16 {
 /// Ce que la touche virtuelle `vk` produit sous l'état `etat` (`ToUnicodeEx`, l'état du clavier
 /// intact), dans la disposition du fil focalisé : l'état porte 0x80 sur Maj et Maj gauche pour le
 /// bit 1, sur Ctrl et Ctrl gauche pour le bit 2, sur Alt et Alt droite pour le bit 4, et rien
-/// d'autre, Verr. Maj éteinte. Un résultat négatif est une touche morte. Une disposition illisible
-/// ne produit rien, ce qui refuse le caractère.
+/// d'autre, Verr. Maj éteinte ; le balayage passé est l'octet bas de `MAPVK_VK_TO_VSC_EX`
+/// (`OCTET_BAS`). Un résultat négatif est une touche morte. Une disposition illisible ne produit
+/// rien, ce qui refuse le caractère.
 pub fn produit(vk: u8, etat: u8) -> Produit {
     let Some(hkl) = disposition() else {
         return Produit::Texte(String::new());
@@ -123,7 +130,7 @@ pub fn produit(vk: u8, etat: u8) -> Produit {
     let ecrits = unsafe {
         ToUnicodeEx(
             u32::from(vk),
-            balayage_dans(vk, hkl),
+            balayage_dans(vk, hkl) & OCTET_BAS,
             &clavier,
             &mut tampon,
             ETAT_INTACT,
@@ -137,7 +144,8 @@ pub fn produit(vk: u8, etat: u8) -> Produit {
 }
 
 /// `MapVirtualKeyExW` (`MAPVK_VK_TO_VSC_EX`) de la touche virtuelle `vk` dans la disposition du fil
-/// focalisé ; 0 si la disposition ne se lit pas.
+/// focalisé, 0xE0 compris pour une touche étendue : le domaine en tire `wScan` et le drapeau
+/// étendu. 0 si la disposition ne se lit pas.
 pub fn balayage(vk: u8) -> u16 {
     disposition().map_or(0, |hkl| u16::try_from(balayage_dans(vk, hkl)).unwrap_or(0))
 }

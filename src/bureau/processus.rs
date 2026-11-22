@@ -98,38 +98,45 @@ pub fn niveau_integrite(pid: Option<u32>) -> Option<u32> {
     niveau_du_jeton(&jeton)
 }
 
-/// Le niveau d'intégrité que porte `jeton`, lu en deux appels : la taille, puis l'étiquette.
+/// Le tampon de `GetTokenInformation` est fait de `u64` : aligné sur 8 octets, il l'est assez pour
+/// l'étiquette, que Windows écrit en tête.
+const _: () = assert!(align_of::<TOKEN_MANDATORY_LABEL>() <= align_of::<u64>());
+
+/// Le niveau d'intégrité que porte `jeton`, lu en deux appels : la taille, puis l'étiquette, dans un
+/// tampon aligné.
 fn niveau_du_jeton(jeton: &Poignee) -> Option<u32> {
     let mut taille_lue = 0u32;
     // SAFETY: le premier appel ne demande que la taille et échoue par construction ; le second
-    // reçoit un tampon de cette taille, qu'il porte.
+    // reçoit un tampon d'au moins cette taille, avec la taille réelle de ce tampon en octets.
     let _ =
         unsafe { GetTokenInformation(jeton.0, TokenIntegrityLevel, None, 0, &raw mut taille_lue) };
     let longueur = usize::try_from(taille_lue).ok()?;
     if longueur < size_of::<TOKEN_MANDATORY_LABEL>() {
         return None;
     }
-    let mut tampon = vec![0u8; longueur];
+    let mut tampon = vec![0u64; longueur.div_ceil(size_of::<u64>())];
+    let octets = u32::try_from(size_of_val(tampon.as_slice())).ok()?;
     unsafe {
         GetTokenInformation(
             jeton.0,
             TokenIntegrityLevel,
             Some(tampon.as_mut_ptr().cast()),
-            taille_lue,
+            octets,
             &raw mut taille_lue,
         )
     }
     .ok()?;
-    // SAFETY: le tampon porte au moins une `TOKEN_MANDATORY_LABEL`, lue sans exiger
-    // d'alignement ; le SID qu'elle désigne est dans le tampon, vivant jusqu'au retour, et se
-    // vérifie avant toute lecture de ses sous-identifiants.
-    let etiquette =
-        unsafe { std::ptr::read_unaligned(tampon.as_ptr().cast::<TOKEN_MANDATORY_LABEL>()) };
+    // SAFETY: le tampon, aligné sur 8 octets comme l'assertion ci-dessus le vérifie, porte en tête
+    // au moins une `TOKEN_MANDATORY_LABEL`, lue alignée. Le SID qu'elle désigne est dans le même
+    // tampon, vivant jusqu'au retour, et se vérifie avant toute lecture de ses sous-identifiants ;
+    // sa place est celle que Windows choisit, et le sous-identifiant, un `u32`, se lit donc sans
+    // exiger d'alignement. Le compte, un octet, n'en demande aucun.
+    let etiquette = unsafe { tampon.as_ptr().cast::<TOKEN_MANDATORY_LABEL>().read() };
     let sid = etiquette.Label.Sid;
     if sid.is_invalid() || !unsafe { IsValidSid(sid) }.as_bool() {
         return None;
     }
     let compte = unsafe { *GetSidSubAuthorityCount(sid) };
     let dernier = compte.checked_sub(1)?;
-    Some(unsafe { *GetSidSubAuthority(sid, u32::from(dernier)) })
+    Some(unsafe { GetSidSubAuthority(sid, u32::from(dernier)).read_unaligned() })
 }

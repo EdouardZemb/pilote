@@ -37,7 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::IsIconic;
 use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 use windows::Win32::UI::WindowsAndMessaging::SW_RESTORE;
 use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
-use windows::Win32::UI::WindowsAndMessaging::ShowWindow;
+use windows::Win32::UI::WindowsAndMessaging::ShowWindowAsync;
 use windows::Win32::UI::WindowsAndMessaging::WS_EX_TOOLWINDOW;
 use windows::core::BOOL;
 
@@ -112,7 +112,8 @@ fn classe(h: HWND) -> String {
     String::from_utf16_lossy(&tampon[..lus])
 }
 
-/// Vrai si DWM masque la fenêtre `h` (`DWMWA_CLOAKED` non nul) ; faux s'il ne le dit pas.
+/// Vrai si DWM masque la fenêtre `h` (`DWMWA_CLOAKED` non nul), ou si l'attribut ne se lit pas :
+/// une lecture ratée ne rend jamais une fenêtre candidate.
 fn masquee(h: HWND) -> bool {
     let mut masquage = 0u32;
     // SAFETY: `masquage` est un `u32`, dont la taille est passée.
@@ -124,7 +125,7 @@ fn masquee(h: HWND) -> bool {
             taille::<u32>(),
         )
     };
-    lu.is_ok() && masquage != 0
+    lu.is_err() || masquage != 0
 }
 
 /// Vrai si la fenêtre `h` porte le style étendu de fenêtre d'outil.
@@ -134,11 +135,19 @@ fn outil(h: HWND) -> bool {
     styles as u32 & WS_EX_TOOLWINDOW.0 != 0
 }
 
-/// Le propriétaire de la fenêtre `h` ; toute erreur, l'absence comprise, vaut « sans
-/// propriétaire ».
-fn proprietaire(h: HWND) -> Option<IdFenetre> {
+/// Le propriétaire de la fenêtre `h` (`GetWindow`, `GW_OWNER`) ; une erreur ou un nul, l'absence
+/// comprise, vaut « sans propriétaire ». C'est la seule lecture de la propriété : la fenêtre lue et
+/// la chaîne du premier plan, que le domaine compare, la lisent ainsi de la même façon.
+fn proprietaire_de(h: HWND) -> Option<HWND> {
     // SAFETY: lecture d'une fenêtre.
-    unsafe { GetWindow(h, GW_OWNER) }.ok().and_then(id_non_nul)
+    unsafe { GetWindow(h, GW_OWNER) }
+        .ok()
+        .filter(|p| !p.is_invalid())
+}
+
+/// Le propriétaire de la fenêtre `h`, s'il en a un.
+fn proprietaire(h: HWND) -> Option<IdFenetre> {
+    proprietaire_de(h).map(id_de)
 }
 
 /// Vrai si la fenêtre `h` est réduite.
@@ -196,22 +205,12 @@ pub fn premier_plan() -> Option<PremierPlan> {
 }
 
 /// La chaîne des propriétaires de `h`, du plus proche au plus lointain, `PROPRIETAIRES_MAX` au
-/// plus ; un propriétaire nul ou en erreur l'arrête.
+/// plus ; le premier « sans propriétaire » de `proprietaire_de` l'arrête, et aucun n'y est nul.
 fn proprietaires(h: HWND) -> Vec<IdFenetre> {
-    let mut chaine = Vec::new();
-    let mut courante = h;
-    while chaine.len() < PROPRIETAIRES_MAX {
-        // SAFETY: lecture d'une fenêtre.
-        let Some(suivante) = unsafe { GetWindow(courante, GW_OWNER) }
-            .ok()
-            .filter(|p| !p.is_invalid())
-        else {
-            break;
-        };
-        chaine.push(id_de(suivante));
-        courante = suivante;
-    }
-    chaine
+    std::iter::successors(proprietaire_de(h), |&courante| proprietaire_de(courante))
+        .take(PROPRIETAIRES_MAX)
+        .map(id_de)
+        .collect()
 }
 
 /// Vrai si la fenêtre `f` est réduite.
@@ -219,11 +218,14 @@ pub fn est_reduite(f: IdFenetre) -> bool {
     reduite(hwnd_de(f))
 }
 
-/// Restaure la fenêtre `f` (`ShowWindow`, `SW_RESTORE`) ; le retour, qui dit si elle était
-/// visible, ne dit rien de la restauration.
+/// Restaure la fenêtre `f` (`ShowWindowAsync`, `SW_RESTORE`), sans attendre son fil :
+/// `ShowWindow` attendrait que le fil d'une autre application traite les messages qu'il lui
+/// envoie, et une application qui ne répond plus bloquerait `pilote`, le verrou des gestes tenu,
+/// avant la sonde de la restauration. Le retour dit si la demande est partie, rien de la
+/// restauration : une fenêtre figée reste réduite, et la sonde du domaine refuse.
 pub fn restaurer(f: IdFenetre) {
-    // SAFETY: une fenêtre qui n'existe plus rend une erreur, sans suite.
-    let _ = unsafe { ShowWindow(hwnd_de(f), SW_RESTORE) };
+    // SAFETY: une fenêtre qui n'existe plus rend faux, sans suite.
+    let _ = unsafe { ShowWindowAsync(hwnd_de(f), SW_RESTORE) };
 }
 
 /// Demande le premier plan pour la fenêtre `f` (`SetForegroundWindow`) ; Windows peut refuser sans

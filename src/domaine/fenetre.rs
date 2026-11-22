@@ -24,9 +24,10 @@ use std::collections::BTreeSet;
 pub struct IdFenetre(pub u64);
 
 /// Une fenêtre de premier niveau, telle que la couche Windows la lit : `masquee` dit le masquage
-/// de DWM, `outil` le style de fenêtre d'outil, `aumid` l'identifiant d'application lu sur la
-/// fenêtre, et `pids_enfants` les processus de ses fenêtres enfants, le sien compris s'il en porte,
-/// chacun lu : une fille dont le processus ne se lit pas n'y paraît pas.
+/// de DWM, vrai aussi quand il ne se lit pas, `outil` le style de fenêtre d'outil, `aumid`
+/// l'identifiant d'application lu sur la fenêtre, et `pids_enfants` les processus de ses fenêtres
+/// enfants, le sien compris s'il en porte, chacun lu : une fille dont le processus ne se lit pas
+/// n'y paraît pas.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FenetreLue {
     pub id: IdFenetre,

@@ -418,12 +418,12 @@ fn exiger_les_modificateurs_relaches(b: &mut dyn Bureau) -> Result<(), Arret> {
 }
 
 /// L'activation de W (décision 8), qui rend le premier plan accepté. Une fenêtre réduite se
-/// restaure, puis se sonde jusqu'à ne plus l'être : le retour de `ShowWindow` ne le dit pas. Rien
-/// de plus si le premier plan est accepté. Sinon, un mouvement de souris nul, la demande, une
-/// sonde ; puis, en un seul envoi, Alt gauche entourant 0xE8, que Windows n'attribue à rien, sans
-/// jamais frapper Alt seule, qui ouvrirait le mode menu d'une fenêtre Win32 ; une sonde du
-/// relâchement des modificateurs, refus sans demande s'ils restent enfoncés ; la demande, une
-/// sonde ; sinon, refus.
+/// restaure, puis se sonde jusqu'à ne plus l'être : la restauration part sans attendre la fenêtre
+/// (`ShowWindowAsync`), dont le retour ne dit pas qu'elle est faite. Rien de plus si le premier
+/// plan est accepté. Sinon, un mouvement de souris nul, la demande, une sonde ; puis, en un seul
+/// envoi, Alt gauche entourant 0xE8, que Windows n'attribue à rien, sans jamais frapper Alt seule,
+/// qui ouvrirait le mode menu d'une fenêtre Win32 ; une sonde du relâchement des modificateurs,
+/// refus sans demande s'ils restent enfoncés ; la demande, une sonde ; sinon, refus.
 fn activer(r: &Retenue, s: &mut Suivi, b: &mut dyn Bureau) -> Result<PremierPlan, Arret> {
     let w = r.fenetre.id;
     let refus = || Arret::Refus(PREMIER_PLAN_REFUSE.into());
@@ -1347,6 +1347,25 @@ mod tests {
                 AppelFaux::Demande(IdFenetre(1)),
             ]
         );
+    }
+    #[test]
+    fn activer_attend_une_restauration_tardive() {
+        // La restauration part sans attendre la fenêtre visée : celle-ci reste réduite un temps
+        // après `restaurer`, et la sonde l'attend au lieu de refuser.
+        let mut b = FauxBureau::avec_appli();
+        b.reduction = Reduction::Tardive(Duree(250));
+        b.premier_plan = None;
+        assert_eq!(x(&mut b, "activer --fenetre appli-essai").code, Code::Fait);
+        assert_eq!(
+            gestes(&b),
+            vec![
+                AppelFaux::Restaurer(IdFenetre(1)),
+                AppelFaux::Envoi(vec![Evenement::SourisNulle]),
+                AppelFaux::Demande(IdFenetre(1)),
+            ]
+        );
+        // Réduite à 0, 100 et 200 ms après la restauration, restaurée à 300 ms.
+        assert_eq!(compte(&b, &AppelFaux::Attendre(Duree(100))), 3);
     }
     #[test]
     fn activer_refuse_une_fenetre_qui_reste_reduite() {

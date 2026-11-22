@@ -66,11 +66,14 @@ pub enum Accord {
     ApresAlt,
 }
 
-/// La réduction de la fenêtre visée : aucune, jusqu'au premier `restaurer`, ou pour toujours.
+/// La réduction de la fenêtre visée : aucune ; jusqu'au premier `restaurer` ; jusqu'à ce que cette
+/// durée ait passé depuis le premier `restaurer`, comme une restauration qui part sans attendre la
+/// fenêtre (`ShowWindowAsync`) ; ou pour toujours.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reduction {
     Aucune,
     JusquARestaurer,
+    Tardive(Duree),
     Toujours,
 }
 
@@ -148,7 +151,8 @@ pub struct FauxBureau {
     /// Le temps simulé, en millisecondes, que seul `attendre` avance.
     pub temps: u64,
     lectures_de_fenetres: usize,
-    restauree: bool,
+    /// Le temps simulé du premier `restaurer`.
+    restauree_a: Option<u64>,
     activee: bool,
     souris_nulle: bool,
     alt_envoyee_a: Option<u64>,
@@ -207,7 +211,7 @@ impl FauxBureau {
             disposition: DispositionEssai::new(),
             temps: DEBUT,
             lectures_de_fenetres: 0,
-            restauree: false,
+            restauree_a: None,
             activee: false,
             souris_nulle: false,
             alt_envoyee_a: None,
@@ -360,7 +364,10 @@ impl Bureau for FauxBureau {
         self.appels.push(AppelFaux::EstReduite);
         match self.reduction {
             Reduction::Aucune => false,
-            Reduction::JusquARestaurer => !self.restauree,
+            Reduction::JusquARestaurer => self.restauree_a.is_none(),
+            Reduction::Tardive(delai) => self
+                .restauree_a
+                .is_none_or(|t| self.temps < t.saturating_add(delai.0)),
             Reduction::Toujours => true,
         }
     }
@@ -400,7 +407,9 @@ impl Bureau for FauxBureau {
     }
     fn restaurer(&mut self, f: IdFenetre) {
         self.appels.push(AppelFaux::Restaurer(f));
-        self.restauree = true;
+        if self.restauree_a.is_none() {
+            self.restauree_a = Some(self.temps);
+        }
         self.activee = true;
     }
     fn demander_premier_plan(&mut self, f: IdFenetre) {

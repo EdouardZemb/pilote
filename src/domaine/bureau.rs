@@ -92,7 +92,7 @@ pub trait Bureau: Disposition {
     fn touches_enfoncees(&mut self) -> Vec<u8>;
     /// Vrai si Verr. Maj est allumée.
     fn verr_maj(&mut self) -> bool;
-    /// Restaure la fenêtre `f`.
+    /// Restaure la fenêtre `f`, sans attendre qu'elle le soit : `est_reduite` le dit ensuite.
     fn restaurer(&mut self, f: IdFenetre);
     /// Demande le premier plan pour la fenêtre `f`, sans savoir si Windows l'accorde.
     fn demander_premier_plan(&mut self, f: IdFenetre);
