@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Appli d'essai</title>
+<style>
+  body { font-family: sans-serif; margin: 1em; }
+  fieldset { margin: 0.5em 0; }
+  #cadre { height: 8em; overflow: auto; border: 1px solid #888; }
+</style>
+</head>
+<body>
+<h1>Appli d'essai</h1>
+
+<!-- L'ordre de tabulation est celui du document : depart, champ, recherche, zone, motdepasse,
+     case, liste, puis le reste. -->
+<p><button id="depart" type="button">Départ</button></p>
+<p><label for="champ">Champ</label> <input id="champ" type="text"></p>
+<p><label for="recherche">Recherche</label> <input id="recherche" type="text" aria-keyshortcuts="/"></p>
+<p><label for="zone">Zone</label> <textarea id="zone" rows="3" cols="40"></textarea></p>
+<p><label for="motdepasse">Mot de passe</label> <input id="motdepasse" type="password"></p>
+<p><input id="case" type="checkbox"> <label for="case">Case</label></p>
+<p>
+  <label for="liste">Liste</label>
+  <select id="liste">
+    <option>Premier</option>
+    <option>Deuxième</option>
+    <option>Troisième</option>
+  </select>
+</p>
+
+<!-- Trois groupes radio, chacun avec son bouton « Toutes » : trois boutons du même nom, que seul
+     leur groupe départage. -->
+<fieldset>
+  <legend>Couleur</legend>
+  <label><input id="couleur-toutes" type="radio" name="couleur" checked> Toutes</label>
+  <label><input id="couleur-rouge" type="radio" name="couleur"> Rouge</label>
+  <label><input id="couleur-bleu" type="radio" name="couleur"> Bleu</label>
+</fieldset>
+<fieldset>
+  <legend>Taille</legend>
+  <label><input id="taille-toutes" type="radio" name="taille" checked> Toutes</label>
+  <label><input id="taille-petite" type="radio" name="taille"> Petite</label>
+  <label><input id="taille-grande" type="radio" name="taille"> Grande</label>
+</fieldset>
+<fieldset>
+  <legend>Forme</legend>
+  <label><input id="forme-toutes" type="radio" name="forme" checked> Toutes</label>
+  <label><input id="forme-ronde" type="radio" name="forme"> Ronde</label>
+  <label><input id="forme-carree" type="radio" name="forme"> Carrée</label>
+</fieldset>
+
+<!-- Deux groupes emboîtés, nommés tous deux « Options ». -->
+<fieldset>
+  <legend>Options</legend>
+  <label><input id="option-externe" type="checkbox"> Option externe</label>
+  <fieldset>
+    <legend>Options</legend>
+    <label><input id="option-interne" type="checkbox"> Option interne</label>
+  </fieldset>
+</fieldset>
+
+<!-- Une liste de 50 lignes, dans un cadre qui défile. -->
+<p id="titre-defilee">Lignes</p>
+<div id="cadre">
+  <ul id="defilee" aria-labelledby="titre-defilee"></ul>
+</div>
+
+<p><button id="annoncer" type="button">Annoncer</button></p>
+<p id="annonce" aria-live="polite"></p>
+
+<p>
+  <button id="ouvrir" type="button">Ouvrir le dialogue</button>
+  <button id="geler" type="button">Geler l'hôte</button>
+  <button id="figer" type="button">Figer la page</button>
+</p>
+
+<script>
+const dire = (genre, e) => window.ipc.postMessage(JSON.stringify({ genre, id: e.target.id || e.target.tagName,
+  key: e.key ?? '', code: e.code ?? '', maj: !!e.shiftKey, valeur: e.target.value ?? '' }));
+addEventListener('keydown', e => dire('touche', e), true);
+addEventListener('input', e => dire('saisie', e), true);
+addEventListener('focusin', e => dire('focus', e), true);
+addEventListener('DOMContentLoaded', () => {
+  const id = new URLSearchParams(location.search).get('focus') || 'depart';
+  document.getElementById(id).focus();
+  window.ipc.postMessage(JSON.stringify({ genre: 'pret' }));
+});
+
+// Un champ de texte : une zone de texte, ou un `<input>` qui n'est ni une case, ni un bouton radio,
+// ni un bouton, ni un fichier, une plage ou une couleur ; le partage du prédicat de pupitre.
+const NON_TEXTE = ['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'range', 'color'];
+const champDeTexte = el => el.tagName === 'TEXTAREA'
+  || (el.tagName === 'INPUT' && !NON_TEXTE.includes(el.type));
+
+// La touche `/`, sans Ctrl, Alt ni Méta (AltGr arrive comme Ctrl et Alt), ni tenue, ni en
+// composition, hors d'un champ de texte, porte le focus à la recherche ; Maj est admise, puisque
+// `/` est Maj + `:` en AZERTY. Dans un champ de texte, elle s'écrit.
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.repeat && !e.isComposing
+      && !champDeTexte(e.target)) {
+    e.preventDefault();
+    document.getElementById('recherche').focus();
+  }
+}, true);
+
+const defilee = document.getElementById('defilee');
+for (let i = 1; i <= 50; i++) {
+  const li = document.createElement('li');
+  li.textContent = 'Ligne ' + i;
+  defilee.append(li);
+}
+
+let annonces = 0;
+document.getElementById('annoncer').addEventListener('click', () => {
+  annonces += 1;
+  document.getElementById('annonce').textContent = 'Annonce ' + annonces;
+});
+
+document.getElementById('ouvrir').addEventListener('click', () => window.ipc.postMessage('ouvrir'));
+document.getElementById('geler').addEventListener('click', () => window.ipc.postMessage('geler 8'));
+// Une boucle de 8 s sur le fil de la page : la page ne répond plus, l'hôte si.
+document.getElementById('figer').addEventListener('click', () => {
+  const fin = Date.now() + 8000;
+  while (Date.now() < fin) { /* la page est figée */ }
+});
+</script>
+</body>
+</html>
