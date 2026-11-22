@@ -28,8 +28,10 @@ use crate::domaine::fenetre::IdFenetre;
 use crate::domaine::fenetre::PremierPlan;
 use crate::domaine::fenetre::Retenue;
 use crate::domaine::fenetre::accepte;
+use crate::domaine::fenetre::aucune_fenetre;
 use crate::domaine::fenetre::ligne_de;
 use crate::domaine::fenetre::lister;
+use crate::domaine::fenetre::refus_du_processus;
 use crate::domaine::fenetre::retenir;
 use crate::domaine::journal::Appel;
 use crate::domaine::journal::ligne;
@@ -106,6 +108,9 @@ enum Travail {
         cible: Cible,
         frappe: Option<Frappe>,
     },
+    /// Une sous-commande que clap accepte et que la tranche ne livre pas, par son nom : une
+    /// commande valide, qui exige le journal avant de sortir en 64 (décision 4).
+    PasEncoreLivree(&'static str),
 }
 
 /// Ce que frappe un geste.
@@ -161,19 +166,37 @@ impl Suivi {
         b.demander_premier_plan(f);
     }
 
-    /// Envoie `lot` d'un seul tenant ; 3 si `SendInput` n'en insère pas tous les événements, ce
-    /// qu'il fait sans erreur quand UIPI le bloque.
+    /// Envoie `lot`, une unité de la frappe, d'un seul tenant ; 3 si `SendInput` n'en insère pas
+    /// tous les événements, ce qu'il fait sans erreur quand UIPI le bloque.
     fn envoyer(&mut self, b: &mut dyn Bureau, lot: &[Evenement]) -> Result<(), Arret> {
         self.agi = true;
-        let inseres = b.envoyer(lot);
-        if usize::try_from(inseres) == Ok(lot.len()) {
-            Ok(())
-        } else {
-            Err(echec(&format!(
-                "SendInput a inséré {inseres} événements sur {}",
-                lot.len()
-            )))
+        insertion_complete(b.envoyer(lot), lot.len())
+    }
+
+    /// Envoie `lot`, le mouvement nul ou l'Alt entourant de l'activation, d'un seul tenant. Un lot
+    /// que `SendInput` n'insère pas du tout ne sort pas : UIPI le bloque sans erreur quand une
+    /// fenêtre plus élevée a le premier plan, un refus prévisible de Windows et non un échec de
+    /// l'outil, et l'activation se juge alors au premier plan relu (1, « Windows a refusé le
+    /// premier plan », s'il ne vient pas). Une insertion partielle reste un échec (3) : une partie
+    /// du lot est partie. L'envoi compte comme un geste dans les deux cas.
+    fn envoyer_pour_activer(&mut self, b: &mut dyn Bureau, lot: &[Evenement]) -> Result<(), Arret> {
+        self.agi = true;
+        match b.envoyer(lot) {
+            0 => Ok(()),
+            inseres => insertion_complete(inseres, lot.len()),
         }
+    }
+}
+
+/// `Ok` si `SendInput` a inséré les `attendus` événements du lot ; sinon 3, « SendInput a inséré
+/// <n> événements sur <attendus> ».
+fn insertion_complete(inseres: u32, attendus: usize) -> Result<(), Arret> {
+    if usize::try_from(inseres) == Ok(attendus) {
+        Ok(())
+    } else {
+        Err(echec(&format!(
+            "SendInput a inséré {inseres} événements sur {attendus}"
+        )))
     }
 }
 
@@ -198,7 +221,9 @@ pub fn executer(args: &[OsString], b: &mut dyn Bureau) -> Issue {
     issue
 }
 
-/// Le corps d'`executer`, hors du journal final.
+/// Le corps d'`executer`, hors du journal final : l'analyse, puis le journal, qu'exige toute
+/// commande valide, puis son travail : `fenetres`, un geste, ou le 64 d'une sous-commande pas
+/// encore livrée.
 fn derouler(args: &[OsString], s: &mut Suivi, b: &mut dyn Bureau) -> Issue {
     // 1. L'analyse (décision 5) : clap, les touches de `touche`, le texte de `taper`. Rien n'y lit
     // une fenêtre, et son refus garde son code, que le journal s'ouvre ou non.
@@ -215,13 +240,16 @@ fn derouler(args: &[OsString], s: &mut Suivi, b: &mut dyn Bureau) -> Issue {
     let fait = match travail {
         Travail::Lister => lister_les_fenetres(b),
         Travail::Geste { cible, frappe } => geste(&cible, frappe.as_ref(), s, b),
+        // Une sous-commande pas encore livrée : 64, le journal ouvert, qui reçoit sa ligne.
+        Travail::PasEncoreLivree(nom) => Err(Arret::Usage(format!("pas encore livrée : {nom}"))),
     };
     fait.unwrap_or_else(Issue::arret)
 }
 
 /// L'analyse : la commande de clap, puis les combinaisons de `touche`, puis le texte de `taper`,
 /// lu, décodé et borné quelle que soit sa source. L'aide et la version rendent leur texte, ligne à
-/// ligne, au code 0 ; une sous-commande que la tranche ne livre pas sort en 64.
+/// ligne, au code 0. Une sous-commande que la tranche ne livre pas est une commande valide : elle
+/// rend son travail à part, que `derouler` juge après le journal.
 fn analyser_le_travail(
     args: &[OsString],
     s: &mut Suivi,
@@ -267,10 +295,7 @@ fn analyser_le_travail(
                 }),
             })
         }
-        autre => Err(Issue::arret(Arret::Usage(format!(
-            "pas encore livrée : {}",
-            autre.nom()
-        )))),
+        autre => Ok(Travail::PasEncoreLivree(autre.nom())),
     }
 }
 
@@ -297,11 +322,19 @@ fn lire_le_texte(source: Source, b: &mut dyn Bureau) -> Result<String, Arret> {
     }
 }
 
-/// `fenetres` : les lignes des fenêtres candidates, sans verrou ni activation. Les fenêtres se
-/// lisent avant l'instantané des processus, qui voit ainsi chaque processus d'une fenêtre lue.
-fn lister_les_fenetres(b: &mut dyn Bureau) -> Result<Issue, Arret> {
+/// Les fenêtres, puis l'instantané des processus, lu après elles : il voit ainsi chaque processus
+/// d'une fenêtre lue. Une lecture ratée sort en 3, son texte échappé.
+fn lire_fenetres_et_processus(
+    b: &mut dyn Bureau,
+) -> Result<(Vec<FenetreLue>, Vec<Processus>), Arret> {
     let fenetres = b.fenetres().map_err(echec_systeme)?;
     let tous = b.processus().map_err(echec_systeme)?;
+    Ok((fenetres, tous))
+}
+
+/// `fenetres` : les lignes des fenêtres candidates, sans verrou ni activation.
+fn lister_les_fenetres(b: &mut dyn Bureau) -> Result<Issue, Arret> {
+    let (fenetres, tous) = lire_fenetres_et_processus(b)?;
     let pp = b.premier_plan();
     Ok(Issue::fait(
         lister(&fenetres, &tous, pp.as_ref())
@@ -319,8 +352,7 @@ fn geste(
     b: &mut dyn Bureau,
 ) -> Result<Issue, Arret> {
     // 3. La fenêtre retenue, la liste de refus comprise, puis la règle de KeePassXC.
-    let fenetres = b.fenetres().map_err(echec_systeme)?;
-    let tous = b.processus().map_err(echec_systeme)?;
+    let (fenetres, tous) = lire_fenetres_et_processus(b)?;
     let r = retenir(cible, &fenetres, &tous)?;
     s.processus = Some(sans_exe(&r.processus.nom).to_string());
     refuser_keepassxc(frappe.is_some(), &r.fenetre, &tous)?;
@@ -423,7 +455,9 @@ fn exiger_les_modificateurs_relaches(b: &mut dyn Bureau) -> Result<(), Arret> {
 /// plan est accepté. Sinon, un mouvement de souris nul, la demande, une sonde ; puis, en un seul
 /// envoi, Alt gauche entourant 0xE8, que Windows n'attribue à rien, sans jamais frapper Alt seule,
 /// qui ouvrirait le mode menu d'une fenêtre Win32 ; une sonde du relâchement des modificateurs,
-/// refus sans demande s'ils restent enfoncés ; la demande, une sonde ; sinon, refus.
+/// refus sans demande s'ils restent enfoncés ; la demande, une sonde ; sinon, refus. Un de ces deux
+/// envois que `SendInput` n'insère pas du tout ne fait pas sortir : l'activation suit son cours et
+/// se juge au premier plan relu ; inséré en partie, il sort en 3 (`Suivi::envoyer_pour_activer`).
 fn activer(r: &Retenue, s: &mut Suivi, b: &mut dyn Bureau) -> Result<PremierPlan, Arret> {
     let w = r.fenetre.id;
     let refus = || Arret::Refus(PREMIER_PLAN_REFUSE.into());
@@ -439,13 +473,13 @@ fn activer(r: &Retenue, s: &mut Suivi, b: &mut dyn Bureau) -> Result<PremierPlan
     if let Some(pp) = premier_plan_accepte(r, b)? {
         return Ok(pp);
     }
-    s.envoyer(b, &[Evenement::SourisNulle])?;
+    s.envoyer_pour_activer(b, &[Evenement::SourisNulle])?;
     s.demander(b, w);
     if let Some(pp) = attendre_le_premier_plan(r, b)? {
         return Ok(pp);
     }
     let alt = lot_touches(&[vk::ALT_G, vk::SANS_EFFET], &mut |v| b.balayage(v));
-    s.envoyer(b, &alt)?;
+    s.envoyer_pour_activer(b, &alt)?;
     let relaches = sonder(
         b,
         PAS_DES_MODIFICATEURS,
@@ -502,29 +536,20 @@ fn sonder<T>(
 /// W relue après l'activation, et l'instantané des processus relu après elle : la fenêtre de même
 /// HWND et de même processus que W, absente sinon (2). Le refus s'y rejuge, puis, pour `touche` et
 /// `taper` (`frappe`), la règle de KeePassXC : une restauration montre des enfants qu'une fenêtre
-/// réduite cachait. Le nom refusé s'échappe.
+/// réduite cachait. Les messages sont ceux de la retenue (`aucune_fenetre`, `refus_du_processus`).
 fn rejuger(
     cible: &Cible,
     r: &Retenue,
     frappe: bool,
     b: &mut dyn Bureau,
 ) -> Result<(FenetreLue, Vec<Processus>), Arret> {
-    let fenetres = b.fenetres().map_err(echec_systeme)?;
-    let tous = b.processus().map_err(echec_systeme)?;
+    let (fenetres, tous) = lire_fenetres_et_processus(b)?;
     let w = fenetres
         .into_iter()
         .find(|f| f.id == r.fenetre.id && f.pid == r.fenetre.pid)
-        .ok_or_else(|| {
-            Arret::Introuvable(format!(
-                "aucune fenêtre de « {} »",
-                echapper(&cible.fenetre)
-            ))
-        })?;
+        .ok_or_else(|| aucune_fenetre(cible))?;
     if let Some(nom) = fenetre_refusee(&w, &tous) {
-        return Err(Arret::Refus(format!(
-            "fenêtre refusée : processus {}",
-            echapper(&nom)
-        )));
+        return Err(refus_du_processus(&nom));
     }
     refuser_keepassxc(frappe, &w, &tous)?;
     Ok((w, tous))
@@ -563,14 +588,34 @@ fn calculer_les_lots(frappe: &Frappe, b: &mut dyn Bureau) -> Result<Vec<Vec<Even
 }
 
 /// Le lot d'une combinaison : par sa touche virtuelle ; `barre` et `interrogation`, qui n'en ont
-/// pas, par la disposition du clavier.
+/// pas, par la disposition du clavier. Un tel caractère nommé s'écrit seul : la disposition choisit
+/// elle-même les modificateurs qui le produisent, et Ctrl, Maj ou Alt demandés en plus en feraient
+/// un autre caractère ou un raccourci. Accompagné de l'un d'eux, il rend l'arrêt d'`analyser_touche`,
+/// qui le refuse déjà : 64, « touche inconnue : <combinaison> ».
 fn lot_de_combinaison(c: &Combinaison, b: &mut dyn Bureau) -> Result<Vec<Evenement>, Arret> {
     match (vk(c.touche), caractere(c.touche)) {
         (Some(v), _) => Ok(lot_combinaison(c, v, &mut |x| b.balayage(x))),
+        (None, Some(car)) if c.ctrl || c.maj || c.alt => Err(Arret::Usage(format!(
+            "touche inconnue : {}",
+            nom_du_caractere_nomme(c, car)
+        ))),
         (None, Some(car)) => lot_clavier(car, b),
         // Aucune touche nommée n'est sans l'une et l'autre : ce bras ferme le `match`.
         (None, None) => Err(echec("touche sans touche virtuelle ni caractère")),
     }
+}
+
+/// La combinaison `c`, dont la touche est le caractère nommé `car`, écrite comme sur la ligne de
+/// commande : ses modificateurs dans l'ordre Ctrl, Maj, Alt, puis `barre` pour `/`, `interrogation`
+/// pour `?`.
+fn nom_du_caractere_nomme(c: &Combinaison, car: char) -> String {
+    let mut morceaux: Vec<&str> = [(c.ctrl, "Ctrl"), (c.maj, "Maj"), (c.alt, "Alt")]
+        .into_iter()
+        .filter(|&(demande, _)| demande)
+        .map(|(_, nom)| nom)
+        .collect();
+    morceaux.push(if car == '/' { "barre" } else { "interrogation" });
+    morceaux.join("+")
 }
 
 /// Le caractère qu'une unité frappe par la disposition : `\n` pour Entrée, `\t` pour Tab.
@@ -632,6 +677,7 @@ mod tests {
     use crate::domaine::fenetre::essai::f;
     use crate::domaine::fenetre::essai::p;
     use crate::domaine::fenetre::essai::pp;
+    use crate::domaine::touches::NomTouche;
     use crate::domaine::touches::essai::touches;
     use std::path::PathBuf;
 
@@ -1194,6 +1240,7 @@ mod tests {
             Issue::arret(Arret::Introuvable("aucune fenêtre de « absent »".into()))
         );
         assert!(!appele(&b, |a| matches!(a, AppelFaux::PrendreVerrou(_))));
+        assert!(aucun_geste(&b));
         assert_eq!(b.journal, vec![format!("{TETE}touche\t\t2\t\n")]);
     }
     #[test]
@@ -1605,6 +1652,73 @@ mod tests {
             ))
         );
     }
+    // Un envoi de l'activation que `SendInput` n'insère pas du tout (UIPI, quand une fenêtre plus
+    // élevée a le premier plan) ne sort pas en 3 : l'activation suit son cours, et se juge au
+    // premier plan relu, qui ne vient pas.
+    #[test]
+    fn activation_non_inseree_se_juge_au_premier_plan() {
+        let mut b = FauxBureau::avec_appli();
+        b.premier_plan = None;
+        b.insere_au_plus = Some(0);
+        assert_eq!(
+            x(&mut b, "activer --fenetre appli-essai"),
+            Issue::arret(Arret::Refus("Windows a refusé le premier plan".into()))
+        );
+        assert_eq!(
+            gestes(&b),
+            vec![
+                AppelFaux::Envoi(vec![Evenement::SourisNulle]),
+                AppelFaux::Demande(IdFenetre(1)),
+                AppelFaux::Envoi(alt_entourant()),
+                AppelFaux::Demande(IdFenetre(1)),
+            ]
+        );
+    }
+    // Un mouvement nul que `SendInput` n'insère pas, puis une demande que Windows accorde : la
+    // commande réussit.
+    #[test]
+    fn mouvement_nul_non_insere_puis_premier_plan_accorde() {
+        let mut b = FauxBureau::avec_appli();
+        b.premier_plan = None;
+        b.accord = Accord::ATouteDemande;
+        b.insere_au_plus = Some(0);
+        assert_eq!(
+            x(&mut b, "activer --fenetre appli-essai"),
+            Issue::fait(vec![
+                "[Fenetre] <Appli d'essai> processus=appli-essai pid=100 premier-plan=oui".into()
+            ])
+        );
+        assert_eq!(
+            gestes(&b),
+            vec![
+                AppelFaux::Envoi(vec![Evenement::SourisNulle]),
+                AppelFaux::Demande(IdFenetre(1)),
+            ]
+        );
+    }
+    // Une insertion partielle de l'Alt entourant reste un échec du système : une partie du lot est
+    // partie, et ce qui reste enfoncé ne se sait pas.
+    #[test]
+    fn alt_entourant_insere_en_partie_sort_en_3() {
+        let mut b = FauxBureau::avec_appli();
+        b.premier_plan = None;
+        b.accord = Accord::ApresAlt;
+        b.insere_au_plus = Some(2);
+        assert_eq!(
+            x(&mut b, "activer --fenetre appli-essai"),
+            Issue::arret(Arret::Echec(
+                "échec du système : SendInput a inséré 2 événements sur 4".into()
+            ))
+        );
+        assert_eq!(
+            gestes(&b),
+            vec![
+                AppelFaux::Envoi(vec![Evenement::SourisNulle]),
+                AppelFaux::Demande(IdFenetre(1)),
+                AppelFaux::Envoi(alt_entourant()),
+            ]
+        );
+    }
     #[test]
     fn touche_barre_passe_par_la_disposition() {
         let mut b = FauxBureau::avec_appli();
@@ -1623,6 +1737,50 @@ mod tests {
                 (0xBF, true),
                 (0xA0, true)
             ]]
+        );
+    }
+    // Un caractère nommé s'écrit seul : accompagné de Ctrl, Maj ou Alt, son lot n'est pas formé, et
+    // l'arrêt est celui d'`analyser_touche`, qui le refuse avant.
+    #[test]
+    fn caractere_nomme_avec_un_modificateur_est_inconnu() {
+        let seul = Combinaison {
+            ctrl: false,
+            maj: false,
+            alt: false,
+            touche: NomTouche::Barre,
+        };
+        for (c, nom) in [
+            (Combinaison { ctrl: true, ..seul }, "Ctrl+barre"),
+            (
+                Combinaison {
+                    maj: true,
+                    touche: NomTouche::Interrogation,
+                    ..seul
+                },
+                "Maj+interrogation",
+            ),
+            (Combinaison { alt: true, ..seul }, "Alt+barre"),
+            (
+                Combinaison {
+                    ctrl: true,
+                    maj: true,
+                    alt: true,
+                    touche: NomTouche::Interrogation,
+                },
+                "Ctrl+Maj+Alt+interrogation",
+            ),
+        ] {
+            let mut b = FauxBureau::avec_appli();
+            assert_eq!(
+                lot_de_combinaison(&c, &mut b),
+                Err(Arret::Usage(format!("touche inconnue : {nom}"))),
+                "{nom}"
+            );
+        }
+        let mut b = FauxBureau::avec_appli();
+        assert_eq!(
+            touches(&lot_de_combinaison(&seul, &mut b).unwrap_or_default()),
+            [(0xA0, false), (0xBF, false), (0xBF, true), (0xA0, true)]
         );
     }
     #[test]
@@ -1761,7 +1919,29 @@ mod tests {
             Issue::arret(Arret::Usage("pas encore livrée : focus".into()))
         );
         assert_eq!(b.journal, vec![format!("{TETE}focus\t\t64\t\n")]);
-        assert!(!appele(&b, |a| matches!(a, AppelFaux::Fenetres)));
+        // Le journal s'ouvre, puis reçoit la ligne : rien ne lit une fenêtre.
+        assert_eq!(
+            b.appels,
+            vec![
+                AppelFaux::OuvrirJournal,
+                AppelFaux::Ajout(format!("{TETE}focus\t\t64\t\n")),
+            ]
+        );
+    }
+    // Une sous-commande que clap accepte est une commande valide : elle exige le journal, et sort
+    // en 1 s'il ne s'ouvre pas, avant de dire qu'elle n'est pas encore livrée.
+    #[test]
+    fn pas_encore_livree_exige_le_journal() {
+        let mut b = FauxBureau::avec_appli();
+        b.journal_ferme = true;
+        assert_eq!(
+            x(&mut b, "focus --fenetre x"),
+            Issue::arret(Arret::Refus(
+                "journal inaccessible : ouvert dans une autre application ?".into()
+            ))
+        );
+        assert_eq!(b.appels, vec![AppelFaux::OuvrirJournal]);
+        assert!(b.journal.is_empty());
     }
     #[test]
     fn lecture_ratee_sort_en_3() {
@@ -1771,6 +1951,7 @@ mod tests {
             x(&mut b, "touche --fenetre appli-essai Tab"),
             Issue::arret(Arret::Echec("échec du système : EnumWindows".into()))
         );
+        assert!(aucun_geste(&b));
     }
     // Une lecture des processus ou une prise du verrou qui échouent sortent de même en 3, leur
     // texte échappé.
@@ -1784,6 +1965,7 @@ mod tests {
                 r"échec du système : CreateToolhelp32Snapshot\n5".into()
             ))
         );
+        assert!(aucun_geste(&b));
         let mut b = FauxBureau::avec_appli();
         b.verrou = Err(ErreurSysteme("CreateMutexW".into()));
         assert_eq!(
@@ -1893,18 +2075,26 @@ mod tests {
             Some("poste verrouillé")
         );
     }
-    // Un échec du système garde son propre message quand le journal refuse aussi sa ligne.
+    // Un échec du système survenu après un geste garde son propre message quand le journal perd
+    // aussi sa ligne, qu'il la refuse ou que son écriture panique.
     #[test]
     fn echec_garde_son_message_quand_le_journal_rate() {
-        let mut b = FauxBureau::avec_appli();
-        b.ajout_rate = true;
-        b.insere_au_plus = Some(1);
-        assert_eq!(
-            x(&mut b, "touche --fenetre appli-essai Tab")
-                .erreur
-                .as_deref(),
-            Some("échec du système : SendInput a inséré 1 événements sur 2")
-        );
+        let regler: [fn(&mut FauxBureau); 2] =
+            [|b| b.ajout_rate = true, |b| b.ajout_panique = true];
+        for (n, perdre_la_ligne) in regler.iter().enumerate() {
+            let mut b = FauxBureau::avec_appli();
+            perdre_la_ligne(&mut b);
+            b.insere_au_plus = Some(1);
+            assert_eq!(
+                x(&mut b, "touche --fenetre appli-essai Tab"),
+                Issue::arret(Arret::Echec(
+                    "échec du système : SendInput a inséré 1 événements sur 2".into()
+                )),
+                "réglage {n}"
+            );
+            assert_eq!(b.envois().len(), 1, "réglage {n}");
+            assert!(b.journal.is_empty(), "réglage {n}");
+        }
     }
     #[test]
     fn panique_sort_en_3_avec_sa_ligne() {

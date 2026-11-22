@@ -58,12 +58,14 @@ pub enum AppelFaux {
 }
 
 /// Quand Windows accorde le premier plan demandé : jamais ; à toute demande qui suit un mouvement
-/// de souris nul ; ou seulement à une demande qui suit l'envoi d'Alt entourant 0xE8.
+/// de souris nul inséré ; seulement à une demande qui suit l'Alt entourant 0xE8 inséré ; ou à toute
+/// demande, même quand rien n'a été inséré avant elle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Accord {
     Jamais,
     AuMouvementNul,
     ApresAlt,
+    ATouteDemande,
 }
 
 /// La réduction de la fenêtre visée : aucune ; jusqu'au premier `restaurer` ; jusqu'à ce que cette
@@ -164,7 +166,7 @@ impl FauxBureau {
     /// premier plan ; des niveaux d'intégrité égaux (0x2000) ; le bureau `Default`, la session
     /// déverrouillée et active ; le journal qui s'ouvre ; le verrou libre ; aucune touche
     /// enfoncée ; Verr. Maj éteinte ; l'AZERTY d'essai ; chaque envoi insérant tout son lot ; le
-    /// premier plan accordé à toute demande qui suit un mouvement de souris nul.
+    /// premier plan accordé à toute demande qui suit un mouvement de souris nul inséré.
     pub fn avec_appli() -> FauxBureau {
         FauxBureau {
             appels: Vec::new(),
@@ -419,6 +421,7 @@ impl Bureau for FauxBureau {
             Accord::Jamais => false,
             Accord::AuMouvementNul => self.souris_nulle,
             Accord::ApresAlt => self.alt_envoyee_a.is_some(),
+            Accord::ATouteDemande => true,
         };
         if accorde {
             self.premier_plan = Some(self.premier_plan_de(f));
@@ -427,18 +430,23 @@ impl Bureau for FauxBureau {
     fn envoyer(&mut self, lot: &[Evenement]) -> u32 {
         self.appels.push(AppelFaux::Envoi(lot.to_vec()));
         self.envois_faits += 1;
-        if lot.contains(&Evenement::SourisNulle) {
-            self.souris_nulle = true;
-        }
-        if est_alt_entourant(lot) {
-            self.alt_envoyee_a = Some(self.temps);
+        let tout = u32::try_from(lot.len()).unwrap_or(u32::MAX);
+        let inseres = self.insere_au_plus.map_or(tout, |n| n.min(tout));
+        // Un lot que `SendInput` n'insère pas en entier n'a rien fait de ce qui compte pour Windows :
+        // ni le mouvement nul ni l'Alt entourant n'ouvrent alors le droit au premier plan.
+        if inseres == tout {
+            if lot.contains(&Evenement::SourisNulle) {
+                self.souris_nulle = true;
+            }
+            if est_alt_entourant(lot) {
+                self.alt_envoyee_a = Some(self.temps);
+            }
         }
         if let Some((n, vole)) = &self.vol
             && *n == self.envois_faits
         {
             self.premier_plan = Some(vole.clone());
         }
-        let tout = u32::try_from(lot.len()).unwrap_or(u32::MAX);
-        self.insere_au_plus.map_or(tout, |n| n.min(tout))
+        inseres
     }
 }

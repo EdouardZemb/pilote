@@ -97,17 +97,13 @@ pub fn retenir(
             .iter()
             .find_map(|&(f, _)| fenetre_refusee(f, tous))
     {
-        return Err(Arret::Refus(format!(
-            "fenêtre refusée : processus {}",
-            echapper(&nom)
-        )));
+        return Err(refus_du_processus(&nom));
     }
     if let Some(titre) = &cible.titre {
         permises.retain(|&(f, _)| f.titre == *titre);
     }
-    let nom = echapper(&cible.fenetre);
     match permises[..] {
-        [] => Err(Arret::Introuvable(format!("aucune fenêtre de « {nom} »"))),
+        [] => Err(aucune_fenetre(cible)),
         [(w, p)] => Ok(Retenue {
             fenetre: w.clone(),
             processus: p.clone(),
@@ -119,11 +115,27 @@ pub fn retenir(
                 .map(|&(f, _)| format!("<{}>", echapper(&f.titre)))
                 .collect();
             Err(Arret::Introuvable(format!(
-                "plusieurs fenêtres de « {nom} » : {} ; --titre ou --pid départage",
+                "plusieurs fenêtres de « {} » : {} ; --titre ou --pid départage",
+                echapper(&cible.fenetre),
                 titres.join(" ")
             )))
         }
     }
+}
+
+/// Le refus d'une fenêtre que la liste de refus écarte pour son processus `nom` (1), à la retenue
+/// comme après l'activation : « fenêtre refusée : processus <nom> », le nom échappé.
+pub fn refus_du_processus(nom: &str) -> Arret {
+    Arret::Refus(format!("fenêtre refusée : processus {}", echapper(nom)))
+}
+
+/// Aucune fenêtre pour `cible` (2), à la retenue comme après l'activation : « aucune fenêtre de
+/// « <nom> » », le nom demandé échappé.
+pub fn aucune_fenetre(cible: &Cible) -> Arret {
+    Arret::Introuvable(format!(
+        "aucune fenêtre de « {} »",
+        echapper(&cible.fenetre)
+    ))
 }
 
 /// Vrai si le premier plan `pp` est accepté pour la retenue `r` : c'est W, son HWND et son
