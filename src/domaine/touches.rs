@@ -104,26 +104,12 @@ pub mod vk {
 /// vient en dernier. Une lettre, de A à Z, n'est admise qu'avec Ctrl ; `barre` et `interrogation`
 /// s'écrivent seules.
 ///
-/// Les combinaisons interdites feraient sortir la frappe de la fenêtre visée : Win ou Windows en
-/// tout morceau, Alt avec Tab, Ctrl et Alt avec Suppr, Alt ou Ctrl avec Echap. Elles se
-/// reconnaissent sur les noms, sous toute casse et dans tout ordre, avant tout nom inconnu, et
-/// refusent en 1, « touche interdite : <texte> ». Tout autre texte qui n'a pas cette forme sort en
-/// 64, « touche inconnue : <texte> ». Le texte reçu y est échappé.
+/// Une combinaison interdite refuse d'abord (`refuser_l_interdite`), avant tout nom inconnu. Tout
+/// autre texte qui n'a pas cette forme sort en 64, « touche inconnue : <texte> », le texte reçu
+/// échappé.
 pub fn analyser_touche(texte: &str) -> Result<Combinaison, Arret> {
+    refuser_l_interdite(texte)?;
     let morceaux: Vec<String> = texte.split('+').map(str::to_ascii_lowercase).collect();
-    let porte = |nom: &str| morceaux.iter().any(|m| m == nom);
-    let (ctrl, alt) = (porte("ctrl"), porte("alt"));
-    if porte("win")
-        || porte("windows")
-        || (alt && porte("tab"))
-        || (ctrl && alt && porte("suppr"))
-        || ((alt || ctrl) && porte("echap"))
-    {
-        return Err(Arret::Refus(format!(
-            "touche interdite : {}",
-            echapper(texte)
-        )));
-    }
     let inconnue = || Arret::Usage(format!("touche inconnue : {}", echapper(texte)));
     let (nom, modificateurs) = morceaux.split_last().ok_or_else(inconnue)?;
     let touche = nom_touche(nom).ok_or_else(inconnue)?;
@@ -146,6 +132,31 @@ pub fn analyser_touche(texte: &str) -> Result<Combinaison, Arret> {
         NomTouche::Barre | NomTouche::Interrogation if c.ctrl || c.maj || c.alt => Err(inconnue()),
         _ => Ok(c),
     }
+}
+
+/// Refuse en 1, « touche interdite : <texte> », le texte reçu échappé, une combinaison qui ferait
+/// sortir la frappe de la fenêtre retenue : Win ou Windows en tout morceau, Alt avec Tab, Alt avec
+/// F6, qui passe d'une fenêtre à l'autre d'un même programme, Ctrl et Alt avec Suppr, Alt ou Ctrl
+/// avec Echap, quels que soient les autres modificateurs. Elle se reconnaît sur les noms, sous toute
+/// casse et dans tout ordre, sans qu'aucun autre morceau ait à être un nom connu : la commande juge
+/// ainsi tous ses arguments contre les interdites avant d'en analyser aucun.
+pub fn refuser_l_interdite(texte: &str) -> Result<(), Arret> {
+    let morceaux: Vec<String> = texte.split('+').map(str::to_ascii_lowercase).collect();
+    let porte = |nom: &str| morceaux.iter().any(|m| m == nom);
+    let (ctrl, alt) = (porte("ctrl"), porte("alt"));
+    if porte("win")
+        || porte("windows")
+        || (alt && porte("tab"))
+        || (alt && porte("f6"))
+        || (ctrl && alt && porte("suppr"))
+        || ((alt || ctrl) && porte("echap"))
+    {
+        return Err(Arret::Refus(format!(
+            "touche interdite : {}",
+            echapper(texte)
+        )));
+    }
+    Ok(())
 }
 
 /// La touche que nomme `nom`, en minuscules : un nom du design, F1 à F12, ou une lettre seule.
@@ -391,6 +402,9 @@ mod tests {
             "Alt+Echap",
             "Ctrl+Echap",
             "Ctrl+Maj+Echap",
+            "Alt+F6",
+            "Alt+Maj+F6",
+            "Ctrl+Alt+F6",
         ] {
             assert_eq!(
                 analyser_touche(t),
@@ -665,6 +679,9 @@ mod tests {
             "Bidule+Win",
             "Alt+Tab+Bidule",
             "Maj+Win",
+            "F6+Alt",
+            "Maj+F6+Alt",
+            "Alt+F6+Bidule",
         ] {
             assert_eq!(
                 analyser_touche(t),
@@ -675,7 +692,7 @@ mod tests {
     }
 
     // Les voisines des interdites restent permises : Suppr sans Ctrl et Alt ensemble, Echap sans
-    // Ctrl ni Alt, Tab sans Alt.
+    // Ctrl ni Alt, Tab et F6 sans Alt.
     #[test]
     fn voisines_des_interdites_sont_permises() {
         for t in [
@@ -686,6 +703,10 @@ mod tests {
             "Ctrl+Tab",
             "Maj+Tab",
             "Ctrl+Maj+Tab",
+            "F6",
+            "Ctrl+F6",
+            "Maj+F6",
+            "Ctrl+Maj+F6",
         ] {
             assert!(analyser_touche(t).is_ok(), "{t}");
         }

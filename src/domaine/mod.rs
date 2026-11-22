@@ -7,7 +7,7 @@
 //! formes courantes, les chemins complets (`std::fs`), les imports groupés (`use std::{…}`) et
 //! les préfixes nus (`fs::`, `env::`, `process::`), d'où un import de `std` par chemin
 //! (`use std::fmt;`). Il ne ferme ni les alias (`use std as s;`), ni les blancs dans un chemin
-//! (`std :: fs`) : la relecture de chaque tâche du domaine les ferme.
+//! (`std :: fs`) : la relecture du code du domaine les ferme.
 
 pub mod bureau;
 pub mod cli;

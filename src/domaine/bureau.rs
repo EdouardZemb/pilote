@@ -69,10 +69,11 @@ pub trait Bureau: Disposition {
     fn ouvrir_journal(&mut self) -> Result<(), ErreurSysteme>;
     /// Ajoute `ligne`, retour final compris, au journal ouvert.
     fn ajouter_au_journal(&mut self, ligne: &str) -> Result<(), ErreurSysteme>;
-    /// Les octets du fichier `chemin`.
-    fn lire_fichier(&mut self, chemin: &Path) -> Result<Vec<u8>, ErreurSysteme>;
-    /// Les octets de l'entrée standard, jusqu'à sa fin.
-    fn lire_entree(&mut self) -> Result<Vec<u8>, ErreurSysteme>;
+    /// Les octets du fichier `chemin`, `max` au plus : la lecture s'arrête là, et le reste du
+    /// fichier n'est jamais lu.
+    fn lire_fichier(&mut self, chemin: &Path, max: usize) -> Result<Vec<u8>, ErreurSysteme>;
+    /// Les octets de l'entrée standard, jusqu'à sa fin ou jusqu'à `max` octets, au premier des deux.
+    fn lire_entree(&mut self, max: usize) -> Result<Vec<u8>, ErreurSysteme>;
     /// L'instantané des processus.
     fn processus(&mut self) -> Result<Vec<Processus>, ErreurSysteme>;
     /// Les fenêtres de premier niveau.

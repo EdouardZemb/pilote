@@ -17,13 +17,14 @@
 //! Le contrôle est une recherche dans le texte, pas une analyse de Rust. Il ferme les formes
 //! courantes : les chemins complets (`std::fs::read`), les imports groupés (`use std::{fs, io};`)
 //! et les préfixes nus qu'ils laissent employer (`fs::read`). Il ne ferme ni les alias (`use std
-//! as s;`, puis `s::fs`), ni les blancs dans un chemin (`std :: fs`) : la relecture de chaque
-//! tâche du domaine les ferme.
+//! as s;`, puis `s::fs`), ni les blancs dans un chemin (`std :: fs`) : la relecture du code du
+//! domaine les ferme.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// `SetValue`, refusé partout sauf ici : un champ se remplit en tapant (ADR-0002).
+/// `SetValue`, refusé partout sauf ici : un champ se remplit en tapant (ADR-0005, « Aucun
+/// `SetValue` »).
 const SET_VALUE: &str = "SetValue";
 
 /// Les mots entiers : un mot ne compte que s'il ne colle à aucune lettre, aucun chiffre ni aucun

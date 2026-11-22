@@ -24,6 +24,7 @@ use crate::domaine::processus::Processus;
 use crate::domaine::texte::Disposition;
 use crate::domaine::texte::essai::DispositionEssai;
 use crate::domaine::touches::vk;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -40,8 +41,8 @@ pub const DEBUT: u64 = 10_000;
 pub enum AppelFaux {
     OuvrirJournal,
     Ajout(String),
-    LireFichier,
-    LireEntree,
+    LireFichier(usize),
+    LireEntree(usize),
     Processus,
     Fenetres,
     PremierPlan,
@@ -135,7 +136,10 @@ pub struct FauxBureau {
     /// Le temps simulé pendant lequel Alt gauche reste enfoncée après l'envoi d'Alt entourant
     /// 0xE8 ; `TOUJOURS` pour ne jamais la relâcher.
     pub alt_tenue: Duree,
-    /// Le nombre d'événements qu'un envoi insère au plus ; tous sinon.
+    /// Le nombre d'événements que chaque envoi insère au plus, dans l'ordre des envois : chaque
+    /// envoi prend le premier de la file ; la file vide, `insere_au_plus` décide.
+    pub insertions: VecDeque<u32>,
+    /// Le nombre d'événements qu'un envoi insère au plus, la file `insertions` vide ; tous sinon.
     pub insere_au_plus: Option<u32>,
     /// Verr. Maj est allumée.
     pub verr_maj: bool,
@@ -197,6 +201,7 @@ impl FauxBureau {
             touches_avant: Vec::new(),
             touches_apres: Vec::new(),
             alt_tenue: Duree(0),
+            insertions: VecDeque::new(),
             insere_au_plus: None,
             verr_maj: false,
             fichiers: Vec::new(),
@@ -246,6 +251,11 @@ impl FauxBureau {
             proprietaires: Vec::new(),
         }
     }
+}
+
+/// Les `max` premiers octets de `octets`, ou tous s'il en porte moins : une lecture bornée.
+fn au_plus(octets: &[u8], max: usize) -> Vec<u8> {
+    octets[..octets.len().min(max)].to_vec()
 }
 
 /// Vrai si `lot` est l'Alt entourant de l'activation : il enfonce Alt gauche et porte 0xE8.
@@ -304,18 +314,19 @@ impl Bureau for FauxBureau {
         self.journal.push(ligne.to_string());
         Ok(())
     }
-    fn lire_fichier(&mut self, chemin: &Path) -> Result<Vec<u8>, ErreurSysteme> {
-        self.appels.push(AppelFaux::LireFichier);
+    fn lire_fichier(&mut self, chemin: &Path, max: usize) -> Result<Vec<u8>, ErreurSysteme> {
+        self.appels.push(AppelFaux::LireFichier(max));
         self.fichiers
             .iter()
             .find(|(nom, _)| nom == chemin)
-            .map(|(_, octets)| octets.clone())
+            .map(|(_, octets)| au_plus(octets, max))
             .ok_or_else(|| ErreurSysteme("fichier introuvable".to_string()))
     }
-    fn lire_entree(&mut self) -> Result<Vec<u8>, ErreurSysteme> {
-        self.appels.push(AppelFaux::LireEntree);
+    fn lire_entree(&mut self, max: usize) -> Result<Vec<u8>, ErreurSysteme> {
+        self.appels.push(AppelFaux::LireEntree(max));
         self.entree
-            .clone()
+            .as_deref()
+            .map(|octets| au_plus(octets, max))
             .ok_or_else(|| ErreurSysteme("entrée fermée".to_string()))
     }
     fn processus(&mut self) -> Result<Vec<Processus>, ErreurSysteme> {
@@ -431,7 +442,11 @@ impl Bureau for FauxBureau {
         self.appels.push(AppelFaux::Envoi(lot.to_vec()));
         self.envois_faits += 1;
         let tout = u32::try_from(lot.len()).unwrap_or(u32::MAX);
-        let inseres = self.insere_au_plus.map_or(tout, |n| n.min(tout));
+        let inseres = self
+            .insertions
+            .pop_front()
+            .or(self.insere_au_plus)
+            .map_or(tout, |n| n.min(tout));
         // Un lot que `SendInput` n'insère pas en entier n'a rien fait de ce qui compte pour Windows :
         // ni le mouvement nul ni l'Alt entourant n'ouvrent alors le droit au premier plan.
         if inseres == tout {

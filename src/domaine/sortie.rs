@@ -251,9 +251,9 @@ mod tests {
         assert!(!i.erreur.unwrap().contains('\n'));
     }
 
-    // Hors du plan : le message de chaque arrêt, que ses tests laissaient muter en "" ou "xyzzy",
-    // les deux formes d'`Issue` entières, que ses tests ne lisent qu'en partie, et les chiffres
-    // hexadécimaux en majuscules que promet `echapper`.
+    // Le message de chaque arrêt, lu tel quel : un message vidé ou remplacé ferait échouer ce test.
+    // Puis les deux formes d'`Issue` entières, et les chiffres hexadécimaux en majuscules que
+    // promet `echapper`.
     #[test]
     fn arrets_portent_leur_message() {
         assert_eq!(
@@ -293,9 +293,9 @@ mod tests {
         assert_eq!(echapper("\u{1b}\u{7f}\u{9b}"), r"\u{001B}\u{007F}\u{009B}");
     }
 
-    // Hors du plan : `valeur` échappe, et une valeur qui porte un retour sort sur une seule ligne.
-    // Aucune entrée des tests du plan ne portait un caractère que `echapper` transforme : sans
-    // ces tests, `valeur` pouvait se passer d'`echapper` sans qu'aucun test échoue.
+    // `valeur` échappe, et une valeur qui porte un retour sort sur une seule ligne : ses entrées
+    // portent chacune un caractère que `echapper` transforme, si bien qu'une `valeur` qui se
+    // passerait d'`echapper` ferait échouer ce test.
     #[test]
     fn valeur_echappe_ses_caracteres() {
         assert_eq!(valeur("a\nb>c\\d\u{7}"), r"a\nb\>c\\d\u{0007}");

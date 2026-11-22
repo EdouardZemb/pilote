@@ -8,7 +8,7 @@ Pour les sessions de Claude Code du poste d'Edouard : faire les essais installé
 
 ## État
 
-Né le 2026-11-21 de `modele-projet` v0.14.0. Phase 0 faite : le brief, le cadrage et les ADR 0001 à 0004. Tranche 1 du lot 1 faite : le socle, le clavier, l'application d'essai. Prochaine : la revue finale de la tranche 1, puis la tranche 2 du lot 1.
+Né le 2026-11-21 de `modele-projet` v0.14.0. Phase 0 faite : le brief, le cadrage et les ADR 0001 à 0004. Tranche 1 du lot 1 faite : le socle, le clavier, l'application d'essai (ADR-0005 et ADR-0006). Prochaine : la tranche 2 du lot 1.
 
 ## Commandes
 
@@ -41,9 +41,9 @@ Ne jamais lancer `cargo test -- --ignored` ni `--include-ignored` sur le poste, 
 
 Les invariants communs sont dans `docs/modele/methode.md`. Ceux-ci sont propres au projet.
 
-1. Rien ne se tape hors de la fenêtre visée : le premier plan se vérifie avant chaque touche et chaque caractère. Taper dans la mauvaise fenêtre, même une fois, est un échec (ADR-0005).
-2. Une capture ne prend que la fenêtre visée, jamais l'écran entier, et l'outil n'en garde aucune copie (ADR-0005).
-3. Ce qu'on lit reste dans la fenêtre visée : un focus hors de la fenêtre retenue ne rend ni nom ni valeur (code 1), et lire n'active rien (ADR-0005).
+1. Rien ne se tape hors de la fenêtre retenue : le premier plan se vérifie avant chaque touche et chaque caractère. Taper dans la mauvaise fenêtre, même une fois, est un échec (ADR-0005).
+2. Une capture ne prend que la fenêtre retenue, jamais l'écran entier, et l'outil n'en garde aucune copie (ADR-0005).
+3. Ce qu'on lit reste dans la fenêtre retenue : un focus hors de la fenêtre retenue ne rend ni nom ni valeur (code 1), et lire n'active rien (ADR-0005).
 4. Une valeur que l'automatisation marque comme mot de passe n'est jamais rendue, et le journal ne garde jamais un texte tapé (ADR-0005).
 5. `nettoyer` n'efface qu'un dossier `pl-<nombre>` de sa liste, directement sous `%TEMP%`, ni jonction ni lien, sur lequel rien ne tourne plus ; il ne tue jamais rien (ADR-0005).
 6. Rien ne configure les refus : aucun fichier qu'une session lirait ne peut élargir ni réduire ce que l'outil refuse (ADR-0005).

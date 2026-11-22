@@ -950,8 +950,8 @@ mod tests {
         );
     }
 
-    // Les tests du contrôle préalable (P1, P2) : le texte tapé s'échappe, et chaque bras de la
-    // traduction a son test.
+    // Le texte tapé s'échappe dans chaque message, et chaque bras de la traduction des erreurs de
+    // clap a son test.
     #[test]
     fn argument_inconnu_echappe() {
         let args: Vec<OsString> = ["pilote", "activer", "--fenetre", "x", "a\nb"]
@@ -1033,10 +1033,9 @@ mod tests {
         }
     }
 
-    // Hors du plan : la conversion du sélecteur et de la forme de `taille`, que les tests du plan
-    // ne lisent pas (cargo-mutants laissait survivre `ArgsSelecteur::convertir` remplacé par
-    // `Default::default()`, les bras de la forme supprimés et la garde `agrandir`), puis la source
-    // `--fichier` et l'option `--comme-au-clavier`, qu'aucun test ne lisait.
+    // Chaque option du sélecteur et chaque forme de `taille` se lisent dans la commande analysée,
+    // la garde d'`agrandir` comprise, puis la source `--fichier` et l'option
+    // `--comme-au-clavier` : une conversion qui perdrait une valeur ferait échouer ces tests.
     #[test]
     fn selecteur_porte_ses_options() {
         assert_eq!(
@@ -1099,10 +1098,10 @@ mod tests {
         );
     }
 
-    // Correction du tour 1 : chaque valeur que la conversion porte se lit, pas seulement le nom de
-    // la sous-commande ni le succès de l'analyse. `--titre` et `--pid` départagent les fenêtres et
-    // dirigent la frappe ; les touches et `--fois` vont aux Tâches 4 et 8. Un titre qui commence
-    // par un tiret éprouve `allow_hyphen_values`.
+    // Chaque valeur que la conversion porte se lit, pas seulement le nom de la sous-commande ni le
+    // succès de l'analyse : `--titre` et `--pid` départagent les fenêtres et dirigent la frappe, et
+    // les touches et `--fois` disent ce qui se frappe. Un titre qui commence par un tiret éprouve
+    // `allow_hyphen_values`.
     #[test]
     fn touche_porte_sa_cible_ses_touches_et_ses_fois() {
         assert_eq!(

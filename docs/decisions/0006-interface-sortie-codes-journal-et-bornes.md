@@ -74,10 +74,10 @@ entre chevrons. `--nom` et `--titre` reçoivent le texte brut, sans échappement
 | Code | Sens |
 |---|---|
 | 0 | fait |
-| 1 | refus : fenêtre refusée, à la retenue comme après l'activation ; fenêtre pas au premier plan, ou que Windows refuse d'y mettre ; poste verrouillé ; touche interdite ; fenêtre plus élevée, ou niveau d'intégrité illisible ; touche de modification enfoncée ; journal inaccessible ; focus hors de la fenêtre visée ; point de clic ou de molette hors de la fenêtre retenue ; les refus de KeePassXC pour `taper` et `touche` ; `valeur` sur un champ de mot de passe ; fenêtre réduite pour une capture ; exécutable refusé pour `lancer` ; dossier encore utilisé, ou dont le chemin n'est plus `%TEMP%\pl-<n>`, pour `nettoyer` ; un autre geste en cours après 5 s d'attente ; par la disposition du clavier, un caractère absent du clavier ou une touche morte ; avec `--comme-au-clavier`, Verr. Maj allumée |
+| 1 | refus : fenêtre refusée, à la retenue comme après l'activation ; fenêtre pas au premier plan, ou que Windows refuse d'y mettre ; pendant la frappe, un envoi que Windows n'insère pas du tout quand le premier plan a changé ; poste verrouillé ; touche interdite ; fenêtre plus élevée, ou niveau d'intégrité illisible ; touche de modification enfoncée ; journal inaccessible ; focus hors de la fenêtre visée ; point de clic ou de molette hors de la fenêtre retenue ; les refus de KeePassXC pour `taper` et `touche` ; `valeur` sur un champ de mot de passe ; fenêtre réduite pour une capture ; exécutable refusé pour `lancer` ; dossier encore utilisé, ou dont le chemin n'est plus `%TEMP%\pl-<n>`, pour `nettoyer` ; un autre geste en cours après 5 s d'attente ; par la disposition du clavier, un caractère absent du clavier ou une touche morte ; avec `--comme-au-clavier`, Verr. Maj allumée |
 | 2 | introuvable : fenêtre ou élément, ou plusieurs candidats sans `--titre`, `--pid` ou `--rang` ; la fenêtre retenue disparue après l'activation ; avec `--attendre`, rien de trouvé dans le délai |
-| 3 | le geste a échoué : l'élément n'offre pas le geste demandé, une capture toute noire, un envoi de la frappe que Windows n'insère pas en entier, ou de l'activation qu'il n'insère qu'en partie, une erreur du système que rien ne prévoit, un délai de l'automatisation dépassé, une ligne du journal perdue après un geste, une panique rattrapée ; le message, « échec du système : … », dit lequel |
-| 64 | usage : une option inconnue, manquante ou mal formée, une valeur hors de ses bornes, une touche inconnue, un texte illisible ou trop long, un fichier ou une entrée standard illisibles, une sous-commande pas encore livrée |
+| 3 | le geste a échoué : l'élément n'offre pas le geste demandé, une capture toute noire, un envoi de la frappe que Windows n'insère qu'en partie, ou pas du tout quand le premier plan est encore accepté, ou un envoi de l'activation qu'il n'insère qu'en partie, chaque insertion partielle après le relâchement tenté, une erreur du système que rien ne prévoit, un délai de l'automatisation dépassé, une ligne du journal perdue après un geste, une panique rattrapée ; le message, « échec du système : … », dit lequel |
+| 64 | usage : une option inconnue, manquante ou mal formée, une valeur hors de ses bornes, une touche inconnue, un texte illisible, vide, trop long ou qui porte un caractère de contrôle, un fichier ou une entrée standard illisibles, une sous-commande pas encore livrée |
 
 Une erreur d'usage que l'analyse des arguments rendrait en 2 sort en 64. Chaque refus dit sa raison,
 et chaque essai d'un refus vérifie ce message, pas seulement le code.
@@ -108,6 +108,9 @@ Les messages que les tests vérifient, mot pour mot :
 | 64 | `pas encore livrée : <sous-commande>` |
 | 64 | `texte illisible : ni UTF-8 ni UTF-16 à BOM` |
 | 64 | `texte trop long : <n> caractères, 10000 au plus` |
+| 64 | `texte trop long : plus de 40006 octets, 10000 caractères au plus` |
+| 64 | `caractère de contrôle : U+<XXXX>` |
+| 64 | `texte vide` |
 | 64 | `fichier illisible : <chemin>` |
 | 64 | `entrée standard illisible` |
 | 64 | `option inconnue : <arg>` |
@@ -127,15 +130,21 @@ Les messages que les tests vérifient, mot pour mot :
   `fenetres`.
 - `<arg>` est le nom que `clap` donne à l'argument (`--fenetre <FENETRE>`), tel quel ; le texte tapé
   (une option ou une sous-commande inconnues) s'y échappe.
+- `<XXXX>` est le point de code du caractère de contrôle, en chiffres hexadécimaux majuscules,
+  quatre au moins : `U+001B`, `U+0085`.
 - Un échec du système nomme ce qui a échoué : par exemple « échec du système : SendInput a inséré
-  <k> événements sur <n> », « échec du système : le journal n'a pas reçu sa ligne », « échec du
-  système : panique ».
+  <k> événements sur <n> ; relâchement : <m> sur <p> », après le relâchement tenté d'un envoi inséré
+  en partie (ADR-0005, « Les lots »), ou sans sa seconde moitié quand le début inséré n'avait rien
+  laissé enfoncé ; « échec du système : le journal n'a pas reçu sa ligne » ; « échec du système :
+  panique ».
 
 ### L'analyse
 
 - Toutes les sous-commandes du lot s'analysent, bornes comprises, sans lire aucune fenêtre :
-  `clap`, puis, pour `touche`, les touches interdites (1) et inconnues (64), puis, pour `taper`, le
-  texte lu, décodé et borné quelle que soit sa source (64).
+  `clap`, puis, pour `touche`, les touches interdites, jugées sur tous les arguments (1), puis les
+  inconnues (64) ; pour `taper`, le texte lu, décodé, admis et borné quelle que soit sa source (64).
+  Une touche inconnue placée avant une interdite ne la cache pas : l'ordre des arguments ne change
+  ni le code ni le message.
 - L'aide (`--help`) et la version (`--version`, « pilote <version> (<commit>) », le commit en 12
   chiffres hexadécimaux, ou « inconnu ») s'écrivent sur la sortie standard, en 0. `pilote` seul sort
   en 64, « sous-commande manquante ».
@@ -148,7 +157,7 @@ Les messages que les tests vérifient, mot pour mot :
 Le journal et sa ligne sont ceux d'ADR-0005. Ce qu'une session en voit : une commande valide qui ne
 peut pas ouvrir le journal sort en 1, « journal inaccessible : ouvert dans une autre application ? »,
 avant toute lecture de fenêtre et tout geste ; l'aide, la version et un refus de l'analyse (l'usage,
-une touche interdite, un texte illisible) gardent leur code, que le journal s'ouvre ou non ; après
+une touche interdite, un texte illisible, vide ou trop long) gardent leur code, que le journal s'ouvre ou non ; après
 un geste, une ligne qui ne parvient pas au journal fait sortir en 3, « échec du système : le journal
 n'a pas reçu sa ligne ».
 
@@ -209,21 +218,36 @@ qui n'offre pas le motif fait sortir en 3. `arbre` montre tous les éléments de
 ### Les bornes
 
 Au-delà, l'usage refuse (64) : `--attendre` jusqu'à 30 000 ms ; `--fois` de 1 à 100 ; `--max` à
-400 par défaut, de 1 à 10 000 ; un texte à taper jusqu'à 10 000 caractères, quelle que soit sa
-source ; `--crans` de -50 à 50, sauf 0 ; `--pendant` de 1 à 300 s ; `--equivalent` de 100 à 400 ;
+400 par défaut, de 1 à 10 000 ; un texte à taper de 1 à 10 000 caractères, quelle que soit sa
+source, et un fichier ou une entrée standard de 40 006 octets au plus ; `--crans` de -50 à 50, sauf 0 ; `--pendant` de 1 à 300 s ; `--equivalent` de 100 à 400 ;
 `--a` de 0 à 100. `--crans` admet un nombre négatif, et les options de texte (`--texte`, `--nom`,
 `--contient`, `--titre`, `--id`, `--classe`, `--dans`, `--egale`) une valeur qui commence par un
 tiret.
 
+Les 40 006 octets sont ceux du plus long texte admis : la BOM de l'UTF-16LE (2 octets), 10 000
+caractères hors du plan de base (4 octets chacun) et le CRLF final que le décodage retire
+(4 octets) ; l'UTF-8 n'en demande jamais plus (3, puis 4 par caractère, puis 2). `pilote` lit un
+fichier ou l'entrée standard 40 007 octets au plus, et refuse le texte dès qu'ils dépassent 40 006,
+sans lire la suite (« texte trop long : plus de 40006 octets, 10000 caractères au plus ») : un
+fichier énorme ne se charge jamais en mémoire.
+
 ### Les touches et les textes à taper
 
 - **Les textes** passent par `--texte`, par `--fichier`, qui lit l'UTF-8 avec ou sans BOM et
-  l'UTF-16LE à BOM, ou par l'entrée standard (`-`). Un seul saut de ligne final est retiré, celui
-  qu'ajoutent le shell ou l'éditeur : CRLF, LF ou CR seul. Un texte se compte en caractères, des
+  l'UTF-16LE à BOM, ou par l'entrée standard (`-`). Un fichier ou l'entrée standard perd un seul
+  saut de ligne final, celui qu'ajoutent le shell ou l'éditeur : CRLF, LF ou CR seul ; `--texte`
+  part tel quel, et son saut final donne un Entrée. Un texte se compte en caractères, des
   valeurs scalaires d'Unicode. CRLF, CR seul et LF seul donnent chacun un Entrée, la tabulation un
   Tab, et tout autre caractère part tel quel, sans normalisation : une lettre décomposée reste deux
   caractères. Sans la disposition du clavier, chaque caractère part en unités UTF-16, les deux
   moitiés d'une paire de substitution dans le même envoi.
+- **Un caractère de contrôle refuse**, quelle que soit la source, avant tout geste et après le
+  retrait du saut final, sauf la tabulation, CR et LF : envoyé en Unicode, il arriverait à la
+  fenêtre comme une commande, non comme du texte (0x08 efface, 0x16 colle, 0x03 interrompt un
+  terminal). Le premier du texte décide : NUL sort en « texte illisible : ni UTF-8 ni UTF-16 à
+  BOM », puisqu'il est la trace d'un UTF-16 sans BOM lu comme de l'UTF-8 ; tout autre en « caractère
+  de contrôle : U+<XXXX> ». Un texte vide, après ce retrait, refuse aussi (« texte vide ») : il
+  n'aurait rien à taper, et l'activation ne servirait à rien.
 - **Les touches ont des noms**, qu'aucun shell ne réécrit, sans égard à la casse : `Tab`, `Echap`,
   `Entree`, `Espace`, `Retour`, `Suppr`, `Inser`, `Haut`, `Bas`, `Gauche`, `Droite`, `Debut`, `Fin`,
   `PageHaut`, `PageBas`, `F1` à `F12`, une lettre avec Ctrl ; `Ctrl`, `Maj` et `Alt` les précèdent,
@@ -248,8 +272,18 @@ tiret.
 
 ### Ce qui précise ou change le plan de la tranche
 
-- Un retour chariot seul en fin de texte est retiré, comme CRLF et LF : les trois formes donnent un
-  Entrée, et un éditeur peut finir un fichier par l'une ou l'autre.
+Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
+
+- Un retour chariot seul à la fin d'un fichier ou de l'entrée standard est retiré, comme CRLF et
+  LF : les trois formes donnent un Entrée, et un éditeur peut finir un fichier par l'une ou l'autre.
+- Un texte qui porte un caractère de contrôle autre que la tabulation, CR et LF refuse en 64, et un
+  texte vide de même : ni l'un ni l'autre n'a de texte à taper.
+- Un fichier ou l'entrée standard se lisent 40 007 octets au plus, et plus de 40 006 refusent en 64
+  sans lire la suite : la borne en caractères se tient sans charger un fichier énorme.
+- Un envoi inséré en partie relâche au mieux ce que son début a enfoncé, et le message le dit
+  (« relâchement : <m> sur <p> »).
+- Pendant la frappe, un envoi que Windows n'insère pas du tout sort en 1, « le premier plan a
+  changé », si le premier plan relu n'est plus accepté, et en 3 sinon.
 - Les états acceptés par `--comme-au-clavier` forment la liste fermée {0, 1, 6, 7}, les bits 64 et
   128 refusés : Windows ne définit pas ces bits, et rien ne part que la disposition ne produise
   exactement.

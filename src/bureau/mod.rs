@@ -96,16 +96,15 @@ impl Bureau for BureauWindows {
             .map_err(|e| ErreurSysteme(format!("écriture du journal : {e}")))
     }
 
-    fn lire_fichier(&mut self, chemin: &Path) -> Result<Vec<u8>, ErreurSysteme> {
-        std::fs::read(chemin).map_err(|e| ErreurSysteme(format!("lecture du fichier : {e}")))
+    fn lire_fichier(&mut self, chemin: &Path, max: usize) -> Result<Vec<u8>, ErreurSysteme> {
+        let fichier =
+            File::open(chemin).map_err(|e| ErreurSysteme(format!("lecture du fichier : {e}")))?;
+        lire_au_plus(fichier, max).map_err(|e| ErreurSysteme(format!("lecture du fichier : {e}")))
     }
 
-    fn lire_entree(&mut self) -> Result<Vec<u8>, ErreurSysteme> {
-        let mut octets = Vec::new();
-        std::io::stdin()
-            .read_to_end(&mut octets)
-            .map_err(|e| ErreurSysteme(format!("lecture de l'entrée standard : {e}")))?;
-        Ok(octets)
+    fn lire_entree(&mut self, max: usize) -> Result<Vec<u8>, ErreurSysteme> {
+        lire_au_plus(std::io::stdin().lock(), max)
+            .map_err(|e| ErreurSysteme(format!("lecture de l'entrée standard : {e}")))
     }
 
     fn processus(&mut self) -> Result<Vec<Processus>, ErreurSysteme> {
@@ -157,6 +156,16 @@ impl Bureau for BureauWindows {
     fn envoyer(&mut self, lot: &[Evenement]) -> u32 {
         clavier::envoyer(lot)
     }
+}
+
+/// Les octets de `source`, jusqu'à sa fin ou jusqu'à `max` octets, au premier des deux : rien de
+/// plus ne se lit, ni ne se garde en mémoire.
+fn lire_au_plus(source: impl Read, max: usize) -> std::io::Result<Vec<u8>> {
+    let mut octets = Vec::new();
+    source
+        .take(u64::try_from(max).unwrap_or(u64::MAX))
+        .read_to_end(&mut octets)?;
+    Ok(octets)
 }
 
 /// Un handle de Windows, fermé (`CloseHandle`) quand il sort de portée, sur tous les chemins.

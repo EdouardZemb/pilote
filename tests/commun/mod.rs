@@ -281,8 +281,8 @@ impl Appli {
             .unwrap_or_default()
     }
 
-    /// Les événements de la page, dans l'ordre du fichier `evenements` : chaque ligne
-    /// `<titre>\t<JSON>`, lue maintenant.
+    /// Les événements de la page et ceux de la boucle (`touche-fenetre`), dans l'ordre du fichier
+    /// `evenements` : chaque ligne `<titre>\t<JSON>`, lue maintenant.
     pub fn lire_evenements(&self) -> Vec<Evenement> {
         exiger_la_ci();
         self.lignes()
@@ -351,8 +351,11 @@ pub fn lancer_appli(nom: &str, options: &[&str]) -> Appli {
     appli
 }
 
-/// Un événement de la page, lu d'une ligne du fichier d'événements : le titre de sa fenêtre, puis
-/// les champs de son JSON, chacun vide s'il manque.
+/// Un événement, lu d'une ligne du fichier d'événements : le titre de sa fenêtre, puis les champs
+/// de son JSON, chacun vide s'il manque. La page dit ses `touche`, `saisie`, `focus` et `pret` ; la
+/// boucle de l'application dit `touche-fenetre`, une touche que la fenêtre a reçue elle-même, hors
+/// de sa page, avec sa touche logique dans `key` et son état dans `etat` (`enfoncee` ou
+/// `relachee`).
 #[derive(Clone, Debug)]
 pub struct Evenement {
     pub titre: String,
@@ -361,9 +364,18 @@ pub struct Evenement {
     pub key: String,
     pub code: String,
     pub valeur: String,
+    pub etat: String,
 }
 
 impl Evenement {
+    /// Vrai si l'événement dit une frappe reçue : un `keydown` de la page (`touche`), une saisie,
+    /// ou une touche reçue par la fenêtre hors de sa page (`touche-fenetre`). Une preuve qu'une
+    /// fenêtre n'a rien reçu refuse les trois.
+    pub fn est_une_frappe(&self) -> bool {
+        exiger_la_ci();
+        matches!(self.genre.as_str(), "touche" | "saisie" | "touche-fenetre")
+    }
+
     /// L'événement que dit `ligne`, `<titre>\t<JSON>` ; `None` pour une ligne d'une autre forme
     /// (`vole`, `vol manqué`, `verrou pris`).
     fn lire(ligne: &str) -> Option<Evenement> {
@@ -383,6 +395,7 @@ impl Evenement {
             key: champ("key"),
             code: champ("code"),
             valeur: champ("valeur"),
+            etat: champ("etat"),
         })
     }
 }

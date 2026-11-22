@@ -24,8 +24,9 @@ use std::fs;
 use std::thread;
 
 /// Lance l'application, le focus sur `champ`, y tape `texte` par `taper --texte`, et vérifie que la
-/// dernière saisie de `champ` le porte. `texte` ne porte rien que `JSON.stringify` échappe : sa
-/// ligne se guette telle quelle.
+/// dernière saisie de `champ` le porte, lue après le calme : une unité de trop arriverait après la
+/// saisie guettée. `texte` ne porte rien que `JSON.stringify` échappe : sa ligne se guette telle
+/// quelle.
 fn taper_dans_le_champ(nom: &str, texte: &str) {
     let appli = lancer_appli("appli-essai", &["--focus", "champ"]);
     let profil = Profil::neuf(nom);
@@ -37,6 +38,7 @@ fn taper_dans_le_champ(nom: &str, texte: &str) {
     assert_eq!(s.code, 0, "{}", s.message());
     let motif = format!("\"valeur\":\"{texte}\"");
     assert!(appli.attendre(&motif, DELAI), "{:?}", appli.lignes());
+    thread::sleep(CALME);
     assert_eq!(appli.derniere_saisie("champ").as_deref(), Some(texte));
 }
 
@@ -104,6 +106,7 @@ fn taper_crlf_donne_un_seul_entree() {
         "{:?}",
         appli.lignes()
     );
+    thread::sleep(CALME);
     assert_eq!(appli.derniere_saisie("zone").as_deref(), Some("a\nb"));
 }
 
@@ -132,6 +135,7 @@ fn taper_arobase_par_altgr() {
         "{:?}",
         appli.lignes()
     );
+    thread::sleep(CALME);
     assert_eq!(appli.derniere_saisie("champ").as_deref(), Some("@"));
     assert!(
         appli
@@ -185,7 +189,7 @@ fn touche_tab_deplace_le_focus() {
     );
 }
 
-/// `ñ`, absent du clavier, refuse en 1 : rien ne part.
+/// `ñ`, absent du clavier, refuse en 1 : rien ne part, ni vers la page, ni vers la fenêtre.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn comme_au_clavier_refuse_un_caractere_absent() {
@@ -209,19 +213,23 @@ fn comme_au_clavier_refuse_un_caractere_absent() {
     );
     thread::sleep(CALME);
     assert!(
-        !appli.lire_evenements().iter().any(|e| e.genre == "saisie"),
+        !appli.lire_evenements().iter().any(|e| e.est_une_frappe()),
         "{:?}",
         appli.lignes()
     );
 }
 
-/// Verr. Maj allumée refuse `taper --comme-au-clavier` en 1 : rien ne part.
+/// Verr. Maj allumée refuse `taper --comme-au-clavier` en 1 : rien ne part. La frappe de Verr. Maj
+/// elle-même arrive à l'application, qui a le premier plan : seuls les événements d'après elle se
+/// jugent, une fois le calme passé.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn comme_au_clavier_refuse_quand_verr_maj_est_allumee() {
     let appli = lancer_appli("appli-essai", &["--focus", "champ"]);
     let profil = Profil::neuf("verr-maj");
     let _verr_maj = VerrMaj::allumer();
+    thread::sleep(CALME);
+    let avant = appli.lire_evenements().len();
     let s = pilote(
         &profil,
         &[
@@ -240,16 +248,21 @@ fn comme_au_clavier_refuse_quand_verr_maj_est_allumee() {
     );
     thread::sleep(CALME);
     assert!(
-        !appli.lire_evenements().iter().any(|e| e.genre == "saisie"),
+        !appli
+            .lire_evenements()
+            .iter()
+            .skip(avant)
+            .any(|e| e.est_une_frappe()),
         "{:?}",
         appli.lignes()
     );
 }
 
-/// Depuis PowerShell 5.1 : un fichier qu'écrit `Out-File`, en UTF-16 à BOM, se tape ; puis, la
-/// console réglée en UTF-8, l'erreur de `pilote` se lit telle quelle. Chaque échec du script sort
-/// sur son propre code : 99 pour un autre PowerShell, le code de `pilote` pour `taper`, 97 et 98
-/// pour le code et le message d'`activer`.
+/// Depuis PowerShell 5.1 : un fichier qu'écrit `Out-File`, en UTF-16 à BOM et fini par le CRLF
+/// qu'il ajoute, se tape sans ce saut final : aucune Entrée ne suit la saisie. Puis, la console
+/// réglée en UTF-8, l'erreur de `pilote` se lit telle quelle. Chaque échec du script sort sur son
+/// propre code : 99 pour un autre PowerShell, le code de `pilote` pour `taper`, 97 et 98 pour le
+/// code et le message d'`activer`.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn taper_depuis_powershell_5_1_un_fichier_utf16() {
@@ -258,7 +271,7 @@ fn taper_depuis_powershell_5_1_un_fichier_utf16() {
     let script = [
         "if ($PSVersionTable.PSVersion.Major -ne 5) { exit 99 }",
         "$f = Join-Path $env:TEMP 'ete.txt'",
-        "'été' | Out-File -FilePath $f -NoNewline",
+        "'été' | Out-File -FilePath $f",
         "& pilote taper --fenetre appli-essai --fichier $f",
         "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
         "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
@@ -281,7 +294,20 @@ fn taper_depuis_powershell_5_1_un_fichier_utf16() {
         "{:?}",
         appli.lignes()
     );
+    thread::sleep(CALME);
     assert_eq!(appli.derniere_saisie("champ").as_deref(), Some("été"));
+    let evenements = appli.lire_evenements();
+    let saisie = rang(&evenements, 0, |e| {
+        e.genre == "saisie" && e.id == "champ" && e.valeur == "été"
+    })
+    .unwrap_or_else(|| panic!("aucune saisie « été » de champ : {evenements:?}"));
+    assert!(
+        rang(&evenements, saisie + 1, |e| {
+            (e.genre == "touche" || e.genre == "touche-fenetre") && e.key == "Enter"
+        })
+        .is_none(),
+        "une Entrée suit la saisie « été » : {evenements:?}"
+    );
 }
 
 /// Depuis Git Bash : un texte sur l'entrée standard, Maj+Tab, puis `barre`, qui évite un argument

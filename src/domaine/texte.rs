@@ -1,4 +1,5 @@
-//! Les textes de `taper` : leur décodage, quelle que soit leur source, et leur borne (décision 5) ;
+//! Les textes de `taper` : leur décodage, quelle que soit leur source, ce qu'ils admettent et leur
+//! borne (décision 5) ;
 //! leur découpe en unités ; et les deux façons de les frapper. Sans la disposition, chaque
 //! caractère part en unités UTF-16 (`KEYEVENTF_UNICODE`), Entrée et Tab par leurs touches. Par la
 //! disposition du clavier (`--comme-au-clavier`, `barre`, `interrogation`), chaque caractère part
@@ -14,16 +15,39 @@ use crate::domaine::touches::vk;
 /// Le plus grand nombre de caractères qu'un texte de `taper` peut porter.
 pub const LONGUEUR_MAX: usize = 10_000;
 
+/// Le plus grand nombre d'octets d'un texte admis, lu d'un fichier ou de l'entrée standard. Un
+/// caractère prend au plus 4 octets dans les deux encodages admis : hors du plan de base, 4 octets
+/// en UTF-8 comme en UTF-16 (sa paire de substitution). S'y ajoutent la BOM et le saut de ligne
+/// final, qui ne compte pas dans la longueur : en UTF-16LE, 2 octets de BOM et 4 de CRLF, soit
+/// 2 + 4 × 10 000 + 4 = 40 006 octets ; en UTF-8, 3 de BOM et 2 de CRLF, soit 40 005. Au-delà de
+/// 40 006 octets, un texte dépasse forcément 10 000 caractères, ou ne se décode pas.
+pub const OCTETS_MAX: usize = 2 + 4 * LONGUEUR_MAX + 4;
+
+/// Ce que lit au plus la couche Windows, d'un fichier ou de l'entrée standard : un octet de plus
+/// que `OCTETS_MAX`, qui dit qu'il y en a trop sans rien lire au-delà.
+pub const LECTURE_MAX: usize = OCTETS_MAX + 1;
+
 /// Le message d'un texte qui ne se décode pas.
 const ILLISIBLE: &str = "texte illisible : ni UTF-8 ni UTF-16 à BOM";
 
-/// Le texte de `taper` lu dans un fichier ou sur l'entrée standard : de l'UTF-16LE s'il commence
-/// par la BOM FF FE, sinon de l'UTF-8, sa BOM EF BB BF retirée s'il la porte. Un octet qui ne se
-/// décode pas, un nombre impair d'octets en UTF-16, une moitié orpheline de paire de substitution
-/// sortent en 64, « texte illisible : ni UTF-8 ni UTF-16 à BOM ». Un seul saut de ligne final est
-/// retiré, celui qu'ajoutent le shell ou l'éditeur : CRLF, LF ou CR seul, les trois formes que
-/// `unites` frappe en Entrée. Le texte est ensuite borné (`borner`).
+/// Le message d'un texte qui n'a rien à taper.
+const VIDE: &str = "texte vide";
+
+/// Le texte de `taper` lu dans un fichier ou sur l'entrée standard, `LECTURE_MAX` octets au plus.
+/// Plus de `OCTETS_MAX` octets sortent d'abord en 64, « texte trop long : plus de 40006 octets,
+/// 10000 caractères au plus » : la lecture s'est arrêtée là, et rien du reste ne se juge. Puis le
+/// texte se décode : de l'UTF-16LE s'il commence par la BOM FF FE, sinon de l'UTF-8, sa BOM EF BB BF
+/// retirée s'il la porte. Un octet qui ne se décode pas, un nombre impair d'octets en UTF-16, une
+/// moitié orpheline de paire de substitution sortent en 64, « texte illisible : ni UTF-8 ni UTF-16
+/// à BOM ». Un seul saut de ligne final est retiré, celui qu'ajoutent le shell ou l'éditeur : CRLF,
+/// LF ou CR seul, les trois formes que `unites` frappe en Entrée. Le texte se juge enfin comme
+/// celui de `--texte` (`admettre`).
 pub fn decoder(octets: &[u8]) -> Result<String, Arret> {
+    if octets.len() > OCTETS_MAX {
+        return Err(Arret::Usage(format!(
+            "texte trop long : plus de {OCTETS_MAX} octets, {LONGUEUR_MAX} caractères au plus"
+        )));
+    }
     let texte = match octets.strip_prefix(&[0xFF, 0xFE]) {
         Some(reste) => utf16le(reste),
         None => {
@@ -32,7 +56,7 @@ pub fn decoder(octets: &[u8]) -> Result<String, Arret> {
         }
     };
     let texte = texte.ok_or_else(|| Arret::Usage(ILLISIBLE.into()))?;
-    borner(sans_saut_final(texte))
+    admettre(sans_saut_final(texte))
 }
 
 /// `octets` lus en UTF-16LE, ou `None` s'ils sont en nombre impair ou portent une moitié
@@ -59,9 +83,34 @@ fn sans_saut_final(mut texte: String) -> String {
     texte
 }
 
+/// Le texte de `taper`, quelle que soit sa source, s'il est admis : sans caractère de contrôle
+/// autre que la tabulation, CR et LF, non vide, puis borné (`borner`). Un caractère de contrôle
+/// arriverait à la fenêtre comme une commande, non comme du texte : 0x08 efface, 0x16 colle, 0x03
+/// interrompt un terminal. Le premier du texte décide, en 64 : NUL sous « texte illisible : ni
+/// UTF-8 ni UTF-16 à BOM », puisqu'il est la trace d'un UTF-16 sans BOM lu comme de l'UTF-8 ; tout
+/// autre sous « caractère de contrôle : U+<XXXX> », en quatre chiffres hexadécimaux majuscules au
+/// moins. Un texte vide sort en 64, « texte vide » : il n'aurait rien à taper, et l'activation de la
+/// fenêtre ne servirait à rien.
+pub fn admettre(texte: String) -> Result<String, Arret> {
+    let controle = texte
+        .chars()
+        .find(|&c| c.is_control() && !matches!(c, '\t' | '\r' | '\n'));
+    if let Some(c) = controle {
+        return Err(Arret::Usage(if c == '\0' {
+            ILLISIBLE.into()
+        } else {
+            format!("caractère de contrôle : U+{:04X}", u32::from(c))
+        }));
+    }
+    if texte.is_empty() {
+        return Err(Arret::Usage(VIDE.into()));
+    }
+    borner(texte)
+}
+
 /// `texte`, s'il porte au plus `LONGUEUR_MAX` caractères (des valeurs scalaires d'Unicode, non
 /// des octets) ; au-delà, 64, « texte trop long : <n> caractères, 10000 au plus ».
-pub fn borner(texte: String) -> Result<String, Arret> {
+fn borner(texte: String) -> Result<String, Arret> {
     let n = texte.chars().count();
     if n > LONGUEUR_MAX {
         return Err(Arret::Usage(format!(
@@ -574,6 +623,118 @@ mod tests {
         let texte = format!("{}\r\n", "x".repeat(10_000));
         assert_eq!(decoder(texte.as_bytes()).map(|t| t.len()), Ok(10_000));
         assert_eq!(LONGUEUR_MAX, 10_000);
+    }
+
+    // Un texte ASCII en UTF-16LE sans BOM est de l'UTF-8 valide, dont un caractère sur deux est
+    // NUL : il est refusé comme illisible, son saut de ligne final compris, que le NUL qui le suit
+    // empêche de retirer. Un NUL arrivé autrement l'est aussi.
+    #[test]
+    fn utf16_sans_bom_illisible() {
+        let illisible = Err(Arret::Usage(
+            "texte illisible : ni UTF-8 ni UTF-16 à BOM".into(),
+        ));
+        assert_eq!(decoder(&[b'a', 0, b'b', 0]), illisible);
+        assert_eq!(decoder(&[b'a', 0, b'\r', 0, b'\n', 0]), illisible);
+        assert_eq!(admettre("a\u{0}b".into()), illisible);
+    }
+
+    // Un caractère de contrôle autre que la tabulation, CR et LF est refusé, quelle que soit la
+    // source, sous son point de code, en quatre chiffres hexadécimaux majuscules au moins.
+    #[test]
+    fn caractere_de_controle_refuse() {
+        for (c, point) in [
+            ('\u{3}', "U+0003"),
+            ('\u{8}', "U+0008"),
+            ('\u{16}', "U+0016"),
+            ('\u{1b}', "U+001B"),
+            ('\u{7f}', "U+007F"),
+            ('\u{85}', "U+0085"),
+            ('\u{9f}', "U+009F"),
+        ] {
+            let refus = Err(Arret::Usage(format!("caractère de contrôle : {point}")));
+            assert_eq!(admettre(format!("a{c}b")), refus, "{point}");
+            assert_eq!(decoder(format!("a{c}b").as_bytes()), refus, "{point}");
+        }
+    }
+
+    // Le premier caractère fautif du texte décide : un autre contrôle avant un NUL est nommé, un
+    // NUL avant un autre contrôle rend le texte illisible.
+    #[test]
+    fn premier_caractere_fautif_decide() {
+        assert_eq!(
+            admettre("x\u{1b}\u{0}\u{8}".into()),
+            Err(Arret::Usage("caractère de contrôle : U+001B".into()))
+        );
+        assert_eq!(
+            admettre("x\u{0}\u{1b}".into()),
+            Err(Arret::Usage(
+                "texte illisible : ni UTF-8 ni UTF-16 à BOM".into()
+            ))
+        );
+    }
+
+    // La tabulation, CR et LF restent permis, comme tout caractère qui n'est pas un contrôle :
+    // l'espace insécable, le séparateur de ligne d'Unicode.
+    #[test]
+    fn tabulation_et_fins_de_ligne_permises() {
+        let texte = "a\tb\rc\nd\r\ne\u{a0}f\u{2028}g";
+        assert_eq!(admettre(texte.into()).as_deref(), Ok(texte));
+        assert_eq!(decoder(texte.as_bytes()).as_deref(), Ok(texte));
+    }
+
+    // Un texte vide est refusé, après le retrait du saut de ligne final : un fichier vide, ou qui
+    // ne porte que sa BOM ou un saut de ligne, n'a rien à taper. Un `\n` seul passé tel quel n'est
+    // pas vide : il donne une Entrée.
+    #[test]
+    fn texte_vide_refuse() {
+        let vide = Err(Arret::Usage("texte vide".into()));
+        assert_eq!(admettre(String::new()), vide);
+        for octets in [
+            &b""[..],
+            b"\n",
+            b"\r\n",
+            b"\r",
+            b"\xEF\xBB\xBF",
+            b"\xEF\xBB\xBF\n",
+            &[0xFF, 0xFE],
+            &[0xFF, 0xFE, b'\r', 0, b'\n', 0],
+        ] {
+            assert_eq!(decoder(octets), vide, "{octets:?}");
+        }
+        assert_eq!(admettre("\n".into()).as_deref(), Ok("\n"));
+    }
+
+    // La lecture se borne en octets. Le plus long texte admis en compte 40 006 : en UTF-16LE à BOM,
+    // 10 000 caractères hors du plan de base et un CRLF final ; en UTF-8 à BOM, le même texte en
+    // compte 40 005. Tous deux passent. Un texte de 40 006 octets passe la borne des octets, puis se
+    // juge en caractères ; au-delà, il est refusé avant tout décodage, même illisible.
+    #[test]
+    fn lecture_bornee_en_octets() {
+        assert_eq!((OCTETS_MAX, LECTURE_MAX), (40_006, 40_007));
+        let mut plus_long = vec![0xFF, 0xFE];
+        for _ in 0..10_000 {
+            plus_long.extend_from_slice(&[0x3D, 0xD8, 0x00, 0xDE]);
+        }
+        plus_long.extend_from_slice(&[b'\r', 0, b'\n', 0]);
+        assert_eq!(plus_long.len(), 40_006);
+        assert_eq!(decoder(&plus_long).map(|t| t.chars().count()), Ok(10_000));
+        let mut utf8 = b"\xEF\xBB\xBF".to_vec();
+        utf8.extend_from_slice("😀".repeat(10_000).as_bytes());
+        utf8.extend_from_slice(b"\r\n");
+        assert_eq!(utf8.len(), 40_005);
+        assert_eq!(decoder(&utf8).map(|t| t.chars().count()), Ok(10_000));
+        assert_eq!(
+            decoder(&[b'x'; 40_006]),
+            Err(Arret::Usage(
+                "texte trop long : 40006 caractères, 10000 au plus".into()
+            ))
+        );
+        let trop = Err(Arret::Usage(
+            "texte trop long : plus de 40006 octets, 10000 caractères au plus".into(),
+        ));
+        assert_eq!(decoder(&[b'x'; 40_007]), trop);
+        plus_long.push(0xFF);
+        assert_eq!(decoder(&plus_long), trop);
     }
 
     // Entrée et Tab partent par leur touche et leur balayage, lu une fois par touche.

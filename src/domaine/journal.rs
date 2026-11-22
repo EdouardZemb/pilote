@@ -1,9 +1,10 @@
-//! Le journal : une ligne par appel de `pilote` (ADR-0002), qui garde la date locale, la session,
-//! la sous-commande, le processus visé, le code de sortie et la longueur du texte tapé, jamais le
-//! texte. Les champs se séparent par une tabulation et la ligne finit par un retour ; un champ
-//! absent reste vide ; chaque champ passe par `echapper`, si bien qu'une session ou un processus
-//! qui porte une tabulation ou un retour ne coupe ni ses voisins ni la ligne. La sous-commande se
-//! lit dans une liste fermée : un premier mot inconnu, un texte tapé compris, s'écrit `inconnue`.
+//! Le journal : une ligne par appel de `pilote` (ADR-0005, « Le journal »), qui garde la date
+//! locale, la session, la sous-commande, le processus visé, le code de sortie et la longueur du
+//! texte tapé, jamais le texte. Les champs se séparent par une tabulation et la ligne finit par un
+//! retour ; un champ absent reste vide ; chaque champ passe par `echapper`, si bien qu'une session
+//! ou un processus qui porte une tabulation ou un retour ne coupe ni ses voisins ni la ligne. La
+//! sous-commande se lit dans une liste fermée : un premier mot inconnu, un texte tapé compris,
+//! s'écrit `inconnue`.
 
 use crate::domaine::sortie::Code;
 use crate::domaine::sortie::echapper;

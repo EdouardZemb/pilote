@@ -51,9 +51,10 @@ fn premier_plan_a(fenetres: &Sortie, processus: &str) -> bool {
         .any(|l| l.contains(&marque) && l.ends_with(" premier-plan=oui"))
 }
 
-/// Vrai si l'application a reçu un `keydown`.
-fn a_recu_une_touche(appli: &Appli) -> bool {
-    appli.lire_evenements().iter().any(|e| e.genre == "touche")
+/// Vrai si l'application a reçu une frappe : un `keydown` ou une saisie de sa page, ou une touche
+/// reçue par l'une de ses fenêtres hors de sa page.
+fn a_recu_une_frappe(appli: &Appli) -> bool {
+    appli.lire_evenements().iter().any(|e| e.est_une_frappe())
 }
 
 /// `activer` porte au premier plan une fenêtre d'arrière-plan, celle d'une copie puis celle de
@@ -93,18 +94,25 @@ fn activer_restaure_une_fenetre_reduite() {
     assert!(premier_plan_a(&f, "appli-essai"), "{:?}", f.lignes());
 }
 
-/// L'activation, Alt entourant compris, ne mange aucun caractère de la frappe qui la suit.
+/// Une frappe qui active elle-même sa fenêtre ne perd aucun caractère : l'application, derrière une
+/// copie lancée après elle, reçoit « bonjour » entier d'un seul `taper`, sans `activer` avant lui,
+/// et la copie ne reçoit rien. Le focus n'entre dans la WebView2 qu'un instant après l'activation :
+/// un caractère perdu là dirait un défaut de l'outil, jamais un essai à assouplir. Puis, la fenêtre
+/// déjà au premier plan, deux `activer` qui n'ont rien à faire et un `taper` ne perdent rien non
+/// plus. L'Alt entourant ne se force pas sur le runner : les tests du domaine le couvrent.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn activer_puis_taper_ne_perd_aucun_caractere() {
     let appli = lancer_appli("appli-essai", &["--focus", "champ"]);
+    let autre = lancer_appli("autre", &[]);
     let profil = Profil::neuf("activer-taper");
-    let a = pilote(&profil, &["activer", "--fenetre", "appli-essai"], None);
-    assert_eq!(a.code, 0, "{}", a.message());
     let f = pilote(&profil, &["fenetres"], None);
-    assert!(premier_plan_a(&f, "appli-essai"), "{:?}", f.lignes());
-    let a = pilote(&profil, &["activer", "--fenetre", "appli-essai"], None);
-    assert_eq!(a.code, 0, "{}", a.message());
+    assert_eq!(f.code, 0, "{}", f.message());
+    assert!(
+        !premier_plan_a(&f, "appli-essai"),
+        "l'appli tient déjà le premier plan : l'essai ne prouverait rien de l'activation ; {:?}",
+        f.lignes()
+    );
     let t = pilote(
         &profil,
         &["taper", "--fenetre", "appli-essai", "--texte", "bonjour"],
@@ -116,14 +124,44 @@ fn activer_puis_taper_ne_perd_aucun_caractere() {
         "{:?}",
         appli.lignes()
     );
+    thread::sleep(CALME);
     assert_eq!(appli.derniere_saisie("champ").as_deref(), Some("bonjour"));
+    assert!(!a_recu_une_frappe(&autre), "{:?}", autre.lignes());
+    let a = pilote(&profil, &["activer", "--fenetre", "appli-essai"], None);
+    assert_eq!(a.code, 0, "{}", a.message());
+    let f = pilote(&profil, &["fenetres"], None);
+    assert!(premier_plan_a(&f, "appli-essai"), "{:?}", f.lignes());
+    let a = pilote(&profil, &["activer", "--fenetre", "appli-essai"], None);
+    assert_eq!(a.code, 0, "{}", a.message());
+    let t = pilote(
+        &profil,
+        &["taper", "--fenetre", "appli-essai", "--texte", "salut"],
+        None,
+    );
+    assert_eq!(t.code, 0, "{}", t.message());
+    assert!(
+        appli.attendre("\"valeur\":\"bonjoursalut\"", DELAI),
+        "{:?}",
+        appli.lignes()
+    );
+    thread::sleep(CALME);
+    assert_eq!(
+        appli.derniere_saisie("champ").as_deref(),
+        Some("bonjoursalut")
+    );
+    assert!(!a_recu_une_frappe(&autre), "{:?}", autre.lignes());
 }
 
 /// Une autre fenêtre prend le premier plan au milieu d'une frappe de 10 000 caractères : la frappe
 /// s'arrête en 1, le message compte les unités parties, et rien ne va au voleur. Le voleur part de
 /// la 100e saisie que reçoit l'application, qui renouvelle son droit de céder le premier plan à
 /// chaque `keydown` : 100 unités au moins sont donc parties, et moins de 10 000. La durée du
-/// `taper` s'écrit sur la sortie d'erreur.
+/// `taper` et le nombre d'unités parties s'écrivent sur la sortie d'erreur.
+///
+/// Ce qui reste hors de portée de l'outil : une unité partie juste après le dernier contrôle du
+/// premier plan, au moment même du vol, va au voleur, sa page ou sa fenêtre (la fenêtre résiduelle
+/// d'une unité, ADR-0005). Un rouge rare sur une frappe reçue par le voleur montre ce reste : il se
+/// rapporte, il ne se relance pas.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn taper_refuse_quand_une_autre_fenetre_vole_le_premier_plan() {
@@ -162,11 +200,21 @@ fn taper_refuse_quand_une_autre_fenetre_vole_le_premier_plan() {
         &["taper", "--fenetre", "appli-essai", "--texte", &texte],
         None,
     );
-    eprintln!("durée du taper : {} ms", t.duree.as_millis());
+    let message = t.message();
+    let parties: Option<usize> = message
+        .strip_prefix("le premier plan a changé : ")
+        .and_then(|reste| reste.strip_suffix(" unités sur 10000 sont parties"))
+        .and_then(|k| k.parse().ok());
+    eprintln!(
+        "durée du taper : {} ms pour {} unités",
+        t.duree.as_millis(),
+        parties.map_or_else(|| "?".to_string(), |k| k.to_string())
+    );
     // La dernière ligne du voleur, `vole` ou `vol manqué`, se guette. `vole` s'écrit dans les 20 ms
     // du vol, au pas du voleur ; une touche partie vers lui juste après le dernier contrôle du
     // premier plan ne s'écrit qu'après son `keydown`, l'IPC de la WebView2 et la boucle de sa
-    // fenêtre. Le calme la laisse arriver avant que les lignes du voleur se jugent ; la valeur
+    // fenêtre, ou après la boucle seule si sa fenêtre la reçoit avant que le focus soit dans sa
+    // WebView2. Le calme la laisse arriver avant que les lignes du voleur se jugent ; la valeur
     // reçue par l'application se lit ensuite.
     voleur.attendre("vol", DELAI);
     thread::sleep(CALME);
@@ -176,18 +224,11 @@ fn taper_refuse_quand_une_autre_fenetre_vole_le_premier_plan() {
         "le voleur n'a pas pris le premier plan : {du_voleur:?}"
     );
     assert!(
-        !du_voleur
-            .iter()
-            .any(|l| l.contains("\"genre\":\"touche\"") || l.contains("\"genre\":\"saisie\"")),
+        !a_recu_une_frappe(&voleur),
         "le voleur a reçu une frappe : {du_voleur:?}"
     );
-    assert_eq!(t.code, 1, "{}", t.message());
-    let message = t.message();
-    let parties: usize = message
-        .strip_prefix("le premier plan a changé : ")
-        .and_then(|reste| reste.strip_suffix(" unités sur 10000 sont parties"))
-        .and_then(|k| k.parse().ok())
-        .unwrap_or_else(|| panic!("message inattendu : {message}"));
+    assert_eq!(t.code, 1, "{message}");
+    let parties = parties.unwrap_or_else(|| panic!("message inattendu : {message}"));
     assert!(parties < 10_000, "{message}");
     assert!(
         parties >= SAISIES_AVANT_LE_VOL,
@@ -203,16 +244,20 @@ fn taper_refuse_quand_une_autre_fenetre_vole_le_premier_plan() {
 }
 
 /// Deux fenêtres titrées du même processus : sans `--titre`, 2, qui les nomme ; avec `--titre`, la
-/// frappe va à la fenêtre nommée, jamais au dialogue.
+/// frappe va à la fenêtre nommée, jamais au dialogue, ni à sa page ni à sa fenêtre. Les deux pages
+/// disent `pret` avant toute frappe : `lancer_appli` rend la main au premier `pret`, qui peut être
+/// celui du dialogue.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn deux_fenetres_titrees_sans_option_titre_sortent_en_2() {
     let appli = lancer_appli("appli-essai", &["--dialogue"]);
-    assert!(
-        appli.attendre("Dialogue d'essai\t{\"genre\":\"pret\"}", DELAI),
-        "{:?}",
-        appli.lignes()
-    );
+    for titre in ["Dialogue d'essai", "Appli d'essai"] {
+        assert!(
+            appli.attendre(&format!("{titre}\t{{\"genre\":\"pret\"}}"), DELAI),
+            "{titre} : {:?}",
+            appli.lignes()
+        );
+    }
     let profil = Profil::neuf("deux-fenetres");
     let s = pilote(
         &profil,
@@ -255,7 +300,7 @@ fn deux_fenetres_titrees_sans_option_titre_sortent_en_2() {
     );
     assert!(
         !e.iter()
-            .any(|e| e.titre == "Dialogue d'essai" && e.genre == "touche"),
+            .any(|e| e.titre == "Dialogue d'essai" && e.est_une_frappe()),
         "{e:?}"
     );
 }
@@ -297,13 +342,13 @@ fn touche_avec_une_liste_ouverte_vise_la_fenetre_principale() {
 }
 
 /// Une copie nommée `SystemSettings` est refusée et absente de `fenetres`, tandis qu'une
-/// application permise, à côté, reste visée et listée : le refus ne lit que les enfants de chaque
-/// fenêtre, jamais tout le bureau.
+/// application permise, à côté, reste visée et listée, et reçoit le Tab qui lui est destiné : le
+/// refus ne lit que les enfants de chaque fenêtre, jamais tout le bureau. La copie ne reçoit rien.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn copie_systemsettings_refusee() {
-    let _permise = lancer_appli("appli-essai", &[]);
-    let _copie = lancer_appli("SystemSettings", &[]);
+    let permise = lancer_appli("appli-essai", &[]);
+    let copie = lancer_appli("SystemSettings", &[]);
     let profil = Profil::neuf("systemsettings");
     let a = pilote(&profil, &["activer", "--fenetre", "SystemSettings"], None);
     assert_eq!((a.code, a.message()), (1, SYSTEMSETTINGS.to_string()));
@@ -332,6 +377,13 @@ fn copie_systemsettings_refusee() {
         None,
     );
     assert_eq!(tab.code, 0, "{}", tab.message());
+    assert!(
+        permise.attendre("\"key\":\"Tab\"", DELAI),
+        "{:?}",
+        permise.lignes()
+    );
+    thread::sleep(CALME);
+    assert!(!a_recu_une_frappe(&copie), "{:?}", copie.lignes());
 }
 
 /// Une copie nommée `KeePassXC` refuse `taper` et `touche` en 1 (décision 3) : rien ne part.
@@ -349,7 +401,7 @@ fn copie_keepassxc_refuse_taper_et_touche() {
     let k = pilote(&profil, &["touche", "--fenetre", "KeePassXC", "Tab"], None);
     assert_eq!((k.code, k.message()), (1, KEEPASSXC.to_string()));
     thread::sleep(CALME);
-    assert!(!a_recu_une_touche(&copie), "{:?}", copie.lignes());
+    assert!(!a_recu_une_frappe(&copie), "{:?}", copie.lignes());
 }
 
 /// Les vrais Paramètres, réduits, restent refusés : leur cadre réduit ne garde que ses propres
@@ -425,13 +477,13 @@ fn deux_gestes_en_meme_temps_le_second_attend_5_s_puis_refuse() {
     );
 }
 
-/// Un verrou que son détenteur, mort, a abandonné se reprend : le geste part. Le teneur vit, mort,
-/// jusqu'au retour de `pilote` : son handle garde le mutex abandonné en vie, et `pilote` le reçoit
-/// en `WAIT_ABANDONED`. Un code 1 ou 3 dirait cet abandon mal traduit.
+/// Un verrou que son détenteur, mort, a abandonné se reprend : le geste part, et le Tab arrive. Le
+/// teneur vit, mort, jusqu'au retour de `pilote` : son handle garde le mutex abandonné en vie, et
+/// `pilote` le reçoit en `WAIT_ABANDONED`. Un code 1 ou 3 dirait cet abandon mal traduit.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn un_verrou_abandonne_est_repris() {
-    let _appli = lancer_appli("appli-essai", &[]);
+    let appli = lancer_appli("appli-essai", &[]);
     let profil = Profil::neuf("verrou-abandonne");
     let mut teneur = tenir_le_verrou();
     teneur.tuer();
@@ -442,6 +494,11 @@ fn un_verrou_abandonne_est_repris() {
     );
     drop(teneur);
     assert_eq!(s.code, 0, "{}", s.message());
+    assert!(
+        appli.attendre("\"key\":\"Tab\"", DELAI),
+        "{:?}",
+        appli.lignes()
+    );
 }
 
 /// Le journal tombe dans le profil que reçoit `pilote`, une ligne de six champs par appel, sans
@@ -507,7 +564,7 @@ fn journal_verrouille_refuse_avant_tout_geste() {
         )
     );
     thread::sleep(CALME);
-    assert!(!a_recu_une_touche(&appli), "{:?}", appli.lignes());
+    assert!(!a_recu_une_frappe(&appli), "{:?}", appli.lignes());
 }
 
 /// La sortie d'erreur et la sortie standard de `pilote` sont en UTF-8, sans BOM.

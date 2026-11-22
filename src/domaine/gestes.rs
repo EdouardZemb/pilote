@@ -1,6 +1,7 @@
 //! L'exécution d'une commande : l'analyse, le journal, puis, pour un geste (`activer`, `touche`,
 //! `taper`), les gardes dans leur ordre, l'activation et l'envoi par unités, le premier plan
-//! vérifié avant chacune (ADR-0002). Tout se décide ici contre le trait `Bureau`.
+//! vérifié avant chacune (ADR-0005, « Les gestes et l'ordre des gardes »). Tout se décide ici
+//! contre le trait `Bureau`.
 //!
 //! L'ordre : l'analyse (décision 5), qui ne lit aucune fenêtre ; le journal, qu'exige toute
 //! commande valide ; la fenêtre retenue, avec la liste de refus et la règle de KeePassXC
@@ -45,8 +46,9 @@ use crate::domaine::sortie::Code;
 use crate::domaine::sortie::Issue;
 use crate::domaine::sortie::echapper;
 use crate::domaine::sortie::formater;
+use crate::domaine::texte::LECTURE_MAX;
 use crate::domaine::texte::Unite;
-use crate::domaine::texte::borner;
+use crate::domaine::texte::admettre;
 use crate::domaine::texte::decoder;
 use crate::domaine::texte::lot_clavier;
 use crate::domaine::texte::lot_unicode;
@@ -54,8 +56,10 @@ use crate::domaine::texte::unites;
 use crate::domaine::touches::Combinaison;
 use crate::domaine::touches::analyser_touche;
 use crate::domaine::touches::caractere;
+use crate::domaine::touches::evenement;
 use crate::domaine::touches::lot_combinaison;
 use crate::domaine::touches::lot_touches;
+use crate::domaine::touches::refuser_l_interdite;
 use crate::domaine::touches::vk;
 use std::ffi::OsString;
 use std::panic::AssertUnwindSafe;
@@ -166,37 +170,118 @@ impl Suivi {
         b.demander_premier_plan(f);
     }
 
-    /// Envoie `lot`, une unité de la frappe, d'un seul tenant ; 3 si `SendInput` n'en insère pas
-    /// tous les événements, ce qu'il fait sans erreur quand UIPI le bloque.
-    fn envoyer(&mut self, b: &mut dyn Bureau, lot: &[Evenement]) -> Result<(), Arret> {
+    /// Envoie `lot` d'un seul tenant (`SendInput`), et rend le nombre d'événements que Windows en a
+    /// insérés : tous, aucun quand UIPI le bloque, sans erreur, ou un début du lot.
+    fn envoyer(&mut self, b: &mut dyn Bureau, lot: &[Evenement]) -> u32 {
         self.agi = true;
-        insertion_complete(b.envoyer(lot), lot.len())
+        b.envoyer(lot)
     }
 
     /// Envoie `lot`, le mouvement nul ou l'Alt entourant de l'activation, d'un seul tenant. Un lot
     /// que `SendInput` n'insère pas du tout ne sort pas : UIPI le bloque sans erreur quand une
     /// fenêtre plus élevée a le premier plan, un refus prévisible de Windows et non un échec de
     /// l'outil, et l'activation se juge alors au premier plan relu (1, « Windows a refusé le
-    /// premier plan », s'il ne vient pas). Une insertion partielle reste un échec (3) : une partie
-    /// du lot est partie. L'envoi compte comme un geste dans les deux cas.
+    /// premier plan », s'il ne vient pas). Une insertion partielle reste un échec (3), après le
+    /// relâchement tenté de ce qu'elle a enfoncé (`insertion_complete`). L'envoi compte comme un
+    /// geste dans tous les cas.
     fn envoyer_pour_activer(&mut self, b: &mut dyn Bureau, lot: &[Evenement]) -> Result<(), Arret> {
-        self.agi = true;
-        match b.envoyer(lot) {
+        match self.envoyer(b, lot) {
             0 => Ok(()),
-            inseres => insertion_complete(inseres, lot.len()),
+            inseres => insertion_complete(b, lot, inseres),
         }
     }
 }
 
-/// `Ok` si `SendInput` a inséré les `attendus` événements du lot ; sinon 3, « SendInput a inséré
-/// <n> événements sur <attendus> ».
-fn insertion_complete(inseres: u32, attendus: usize) -> Result<(), Arret> {
-    if usize::try_from(inseres) == Ok(attendus) {
-        Ok(())
-    } else {
-        Err(echec(&format!(
-            "SendInput a inséré {inseres} événements sur {attendus}"
-        )))
+/// `Ok` si `SendInput` a inséré les `inseres` événements de `lot`, tous ; sinon 3, « SendInput a
+/// inséré <k> événements sur <n> ». `SendInput` insère dans l'ordre : une insertion partielle a
+/// enfoncé, dans le début inséré du lot, des touches que la fin devait relâcher, et qui resteraient
+/// enfoncées pour tout le poste. Leurs relâchements (`relachements`) partent alors d'un seul envoi,
+/// sans garde du premier plan, puisqu'ils ne tapent rien, et le message dit combien Windows en a
+/// insérés : « ; relâchement : <m> sur <p> ». Le relâchement est tenté, sans garantie : ce qui a
+/// refusé la fin du lot, comme un bureau sécurisé, peut le refuser aussi. Quand le début inséré
+/// n'a rien laissé enfoncé, rien ne part, et le message s'arrête à l'envoi.
+fn insertion_complete(b: &mut dyn Bureau, lot: &[Evenement], inseres: u32) -> Result<(), Arret> {
+    let k = usize::try_from(inseres).unwrap_or(usize::MAX);
+    if k == lot.len() {
+        return Ok(());
+    }
+    let envoi = format!("SendInput a inséré {inseres} événements sur {}", lot.len());
+    let a_relacher = lot
+        .get(..k)
+        .map(|debut| relachements(debut, &mut |v| b.balayage(v)))
+        .unwrap_or_default();
+    if a_relacher.is_empty() {
+        return Err(echec(&envoi));
+    }
+    let relaches = b.envoyer(&a_relacher);
+    Err(echec(&format!(
+        "{envoi} ; relâchement : {relaches} sur {}",
+        a_relacher.len()
+    )))
+}
+
+/// Les relâchements de ce que `debut`, le début inséré d'un lot, a enfoncé sans le relâcher :
+/// chaque touche et chaque unité UTF-16 restées enfoncées, relâchées dans l'ordre inverse de leur
+/// enfoncement, une touche avec le balayage et l'extension de son enfoncement. Quand une Alt, gauche
+/// ou droite, est à relâcher, 0xE8, que Windows n'attribue à rien, est d'abord enfoncée puis
+/// relâchée : une Alt relâchée seule ouvrirait le mode menu de la fenêtre au premier plan. Cette
+/// frappe de 0xE8 relâche aussi 0xE8, si le début l'a laissée enfoncée.
+fn relachements(debut: &[Evenement], balayage: &mut dyn FnMut(u8) -> u16) -> Vec<Evenement> {
+    let mut enfoncees: Vec<Evenement> = Vec::new();
+    for e in debut {
+        match *e {
+            Evenement::Touche {
+                relachee: false, ..
+            }
+            | Evenement::Unicode {
+                relachee: false, ..
+            } => enfoncees.push(*e),
+            Evenement::Touche { .. } | Evenement::Unicode { .. } => {
+                if let Some(i) = enfoncees.iter().rposition(|x| meme_touche(x, e)) {
+                    enfoncees.remove(i);
+                }
+            }
+            Evenement::SourisNulle => {}
+        }
+    }
+    let mut lot = Vec::new();
+    let alt = |e: &Evenement| matches!(*e, Evenement::Touche { vk, .. } if vk == vk::ALT_G || vk == vk::ALT_D);
+    if enfoncees.iter().any(alt) {
+        let sans_effet = balayage(vk::SANS_EFFET);
+        lot.push(evenement(vk::SANS_EFFET, sans_effet, false));
+        lot.push(evenement(vk::SANS_EFFET, sans_effet, true));
+        enfoncees.retain(|e| !meme_touche(e, &lot[0]));
+    }
+    lot.extend(enfoncees.iter().rev().map(|&e| relachee(e)));
+    lot
+}
+
+/// Vrai si `a` et `b` portent la même touche virtuelle, ou la même unité UTF-16, enfoncée ou
+/// relâchée.
+fn meme_touche(a: &Evenement, b: &Evenement) -> bool {
+    match (*a, *b) {
+        (Evenement::Touche { vk: x, .. }, Evenement::Touche { vk: y, .. }) => x == y,
+        (Evenement::Unicode { unite: x, .. }, Evenement::Unicode { unite: y, .. }) => x == y,
+        _ => false,
+    }
+}
+
+/// L'événement `e`, relâché.
+fn relachee(e: Evenement) -> Evenement {
+    match e {
+        Evenement::Touche {
+            vk, scan, etendue, ..
+        } => Evenement::Touche {
+            vk,
+            scan,
+            etendue,
+            relachee: true,
+        },
+        Evenement::Unicode { unite, .. } => Evenement::Unicode {
+            unite,
+            relachee: true,
+        },
+        Evenement::SourisNulle => Evenement::SourisNulle,
     }
 }
 
@@ -246,8 +331,9 @@ fn derouler(args: &[OsString], s: &mut Suivi, b: &mut dyn Bureau) -> Issue {
     fait.unwrap_or_else(Issue::arret)
 }
 
-/// L'analyse : la commande de clap, puis les combinaisons de `touche`, puis le texte de `taper`,
-/// lu, décodé et borné quelle que soit sa source. L'aide et la version rendent leur texte, ligne à
+/// L'analyse : la commande de clap, puis les combinaisons de `touche`, les interdites de tous les
+/// arguments jugées avant aucun nom, puis le texte de `taper`, lu, décodé et jugé quelle que soit
+/// sa source. L'aide et la version rendent leur texte, ligne à
 /// ligne, au code 0. Une sous-commande que la tranche ne livre pas est une commande valide : elle
 /// rend son travail à part, que `derouler` juge après le journal.
 fn analyser_le_travail(
@@ -270,6 +356,11 @@ fn analyser_le_travail(
             touches,
             fois,
         } => {
+            // Les interdites de tous les arguments, puis les noms : une touche inconnue placée
+            // avant une interdite ne la cache pas (1 avant 64).
+            for t in &touches {
+                refuser_l_interdite(t).map_err(Issue::arret)?;
+            }
             let combinaisons = touches
                 .iter()
                 .map(|t| analyser_touche(t))
@@ -299,13 +390,14 @@ fn analyser_le_travail(
     }
 }
 
-/// Le texte de `taper` : `--texte` borné ; un fichier ou l'entrée standard, lus, décodés et
-/// bornés (`decoder`). Une lecture ratée est un usage (64), le chemin échappé.
+/// Le texte de `taper` : `--texte` jugé (`admettre`) ; un fichier ou l'entrée standard, lus
+/// `LECTURE_MAX` octets au plus, décodés et jugés (`decoder`). Une lecture ratée est un usage (64),
+/// le chemin échappé.
 fn lire_le_texte(source: Source, b: &mut dyn Bureau) -> Result<String, Arret> {
     match source {
-        Source::Texte(texte) => borner(texte),
+        Source::Texte(texte) => admettre(texte),
         Source::Fichier(chemin) => {
-            let octets = b.lire_fichier(&chemin).map_err(|_| {
+            let octets = b.lire_fichier(&chemin, LECTURE_MAX).map_err(|_| {
                 Arret::Usage(format!(
                     "fichier illisible : {}",
                     echapper(&chemin.display().to_string())
@@ -315,7 +407,7 @@ fn lire_le_texte(source: Source, b: &mut dyn Bureau) -> Result<String, Arret> {
         }
         Source::Entree => {
             let octets = b
-                .lire_entree()
+                .lire_entree(LECTURE_MAX)
                 .map_err(|_| Arret::Usage("entrée standard illisible".into()))?;
             decoder(&octets)
         }
@@ -396,15 +488,25 @@ fn geste(
     exiger_les_modificateurs_relaches(b)?;
     // 12. Tous les lots, avant le premier envoi : un caractère refusé n'en laisse partir aucun.
     let lots = calculer_les_lots(frappe, b)?;
-    // 13. Pour chaque unité : le premier plan accepté, l'envoi, la cadence.
+    // 13. Pour chaque unité : le premier plan accepté, l'envoi, la cadence. Un envoi que Windows
+    // n'insère pas du tout se juge au premier plan relu : UIPI bloque sans erreur l'envoi vers une
+    // fenêtre plus élevée qui vient de prendre le premier plan, un refus prévisible de Windows, et
+    // non un échec de l'outil. Le premier plan encore accepté, l'échec reste 3.
     for (parties, lot) in lots.iter().enumerate() {
-        if premier_plan_accepte(&r, b)?.is_none() {
-            return Err(Arret::Refus(format!(
+        let change = || {
+            Arret::Refus(format!(
                 "le premier plan a changé : {parties} unités sur {} sont parties",
                 lots.len()
-            )));
+            ))
+        };
+        if premier_plan_accepte(&r, b)?.is_none() {
+            return Err(change());
         }
-        s.envoyer(b, lot)?;
+        let inseres = s.envoyer(b, lot);
+        if inseres == 0 && premier_plan_accepte(&r, b)?.is_none() {
+            return Err(change());
+        }
+        insertion_complete(b, lot, inseres)?;
         b.attendre(CADENCE);
     }
     Ok(Issue::fait(Vec::new()))
@@ -457,7 +559,8 @@ fn exiger_les_modificateurs_relaches(b: &mut dyn Bureau) -> Result<(), Arret> {
 /// qui ouvrirait le mode menu d'une fenêtre Win32 ; une sonde du relâchement des modificateurs,
 /// refus sans demande s'ils restent enfoncés ; la demande, une sonde ; sinon, refus. Un de ces deux
 /// envois que `SendInput` n'insère pas du tout ne fait pas sortir : l'activation suit son cours et
-/// se juge au premier plan relu ; inséré en partie, il sort en 3 (`Suivi::envoyer_pour_activer`).
+/// se juge au premier plan relu ; inséré en partie, il sort en 3, après le relâchement tenté
+/// (`Suivi::envoyer_pour_activer`).
 fn activer(r: &Retenue, s: &mut Suivi, b: &mut dyn Bureau) -> Result<PremierPlan, Arret> {
     let w = r.fenetre.id;
     let refus = || Arret::Refus(PREMIER_PLAN_REFUSE.into());
@@ -679,6 +782,7 @@ mod tests {
     use crate::domaine::fenetre::essai::pp;
     use crate::domaine::touches::NomTouche;
     use crate::domaine::touches::essai::touches;
+    use std::collections::VecDeque;
     use std::path::PathBuf;
 
     /// Le début de chaque ligne du journal du faux bureau : sa date, puis sa session.
@@ -893,7 +997,7 @@ mod tests {
             i,
             Issue::arret(Arret::Usage("fichier illisible : f.txt".into()))
         );
-        assert!(appele(&b, |a| matches!(a, AppelFaux::LireFichier)));
+        assert!(appele(&b, |a| *a == AppelFaux::LireFichier(40_007)));
         assert!(!appele(&b, |a| matches!(a, AppelFaux::Fenetres)));
         assert!(aucun_geste(&b));
     }
@@ -906,9 +1010,147 @@ mod tests {
             i,
             Issue::arret(Arret::Usage("entrée standard illisible".into()))
         );
-        assert!(appele(&b, |a| matches!(a, AppelFaux::LireEntree)));
+        assert!(appele(&b, |a| *a == AppelFaux::LireEntree(40_007)));
         assert!(!appele(&b, |a| matches!(a, AppelFaux::Fenetres)));
         assert!(aucun_geste(&b));
+    }
+    /// `taper --fenetre appli-essai`, puis `source`, des arguments passés tels quels : un texte peut
+    /// porter une espace, un caractère de contrôle, ou être vide.
+    fn taper_avec(source: &[&str]) -> Vec<OsString> {
+        ["pilote", "taper", "--fenetre", "appli-essai"]
+            .iter()
+            .chain(source)
+            .map(OsString::from)
+            .collect()
+    }
+    /// Vrai si l'analyse a refusé avant le journal et toute lecture de fenêtre : la seule ligne du
+    /// journal est celle de `taper` au code 64, et rien n'est lu ni fait du poste.
+    fn refuse_a_l_analyse(b: &FauxBureau) -> bool {
+        aucun_geste(b)
+            && !appele(b, |a| {
+                matches!(a, AppelFaux::Fenetres | AppelFaux::PrendreVerrou(_))
+            })
+            && b.journal == vec![format!("{TETE}taper\t\t64\t\n")]
+    }
+    // Un caractère de contrôle autre que la tabulation, CR et LF refuse en 64 à l'analyse, quelle
+    // que soit la source du texte : `--texte`, un fichier, l'entrée standard.
+    #[test]
+    fn caractere_de_controle_refuse_pour_chaque_source() {
+        let mut b = FauxBureau::avec_appli();
+        assert_eq!(
+            executer(&taper_avec(&["--texte", "a\u{1b}b"]), &mut b),
+            Issue::arret(Arret::Usage("caractère de contrôle : U+001B".into()))
+        );
+        assert!(refuse_a_l_analyse(&b));
+        let mut b = FauxBureau::avec_appli();
+        b.fichiers = vec![(PathBuf::from("c.txt"), b"a\x08b\r\n".to_vec())];
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai --fichier c.txt"),
+            Issue::arret(Arret::Usage("caractère de contrôle : U+0008".into()))
+        );
+        assert!(refuse_a_l_analyse(&b));
+        let mut b = FauxBureau::avec_appli();
+        b.entree = Some("a\u{85}b".as_bytes().to_vec());
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai -"),
+            Issue::arret(Arret::Usage("caractère de contrôle : U+0085".into()))
+        );
+        assert!(refuse_a_l_analyse(&b));
+        // Avant le journal : un journal fermé ne change ni le code ni le message.
+        let mut b = FauxBureau::avec_appli();
+        b.journal_ferme = true;
+        b.entree = Some(b"\x7f".to_vec());
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai -"),
+            Issue::arret(Arret::Usage("caractère de contrôle : U+007F".into()))
+        );
+        assert!(aucun_geste(&b));
+    }
+    // Un fichier ASCII en UTF-16LE sans BOM, ses NUL compris, est illisible.
+    #[test]
+    fn utf16_sans_bom_refuse_comme_illisible() {
+        let mut b = FauxBureau::avec_appli();
+        b.fichiers = vec![(
+            PathBuf::from("u.txt"),
+            vec![b'a', 0, b'b', 0, b'\r', 0, b'\n', 0],
+        )];
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai --fichier u.txt"),
+            Issue::arret(Arret::Usage(
+                "texte illisible : ni UTF-8 ni UTF-16 à BOM".into()
+            ))
+        );
+        assert!(refuse_a_l_analyse(&b));
+    }
+    // Un texte vide refuse en 64 à l'analyse, pour chaque source : `--texte ""`, un fichier qui ne
+    // porte qu'un saut de ligne, une entrée standard vide. Rien n'est activé.
+    #[test]
+    fn texte_vide_refuse_pour_chaque_source() {
+        let vide = Issue::arret(Arret::Usage("texte vide".into()));
+        let mut b = FauxBureau::avec_appli();
+        assert_eq!(executer(&taper_avec(&["--texte", ""]), &mut b), vide);
+        assert!(refuse_a_l_analyse(&b));
+        let mut b = FauxBureau::avec_appli();
+        b.fichiers = vec![(PathBuf::from("v.txt"), b"\r\n".to_vec())];
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai --fichier v.txt"),
+            vide
+        );
+        assert!(refuse_a_l_analyse(&b));
+        let mut b = FauxBureau::avec_appli();
+        b.entree = Some(Vec::new());
+        assert_eq!(x(&mut b, "taper --fenetre appli-essai -"), vide);
+        assert!(refuse_a_l_analyse(&b));
+    }
+    // Un fichier ou une entrée standard se lisent au plus 40 007 octets : au-delà de 40 006, le texte
+    // dépasse forcément 10 000 caractères, et refuse en 64 à l'analyse. À 40 006 octets, il passe la
+    // borne des octets et se juge en caractères.
+    #[test]
+    fn lecture_bornee_en_octets_refuse_en_64() {
+        let trop = Issue::arret(Arret::Usage(
+            "texte trop long : plus de 40006 octets, 10000 caractères au plus".into(),
+        ));
+        let mut b = FauxBureau::avec_appli();
+        b.fichiers = vec![(PathBuf::from("g.txt"), vec![b'x'; 50_000])];
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai --fichier g.txt"),
+            trop
+        );
+        assert!(appele(&b, |a| *a == AppelFaux::LireFichier(40_007)));
+        assert!(refuse_a_l_analyse(&b));
+        let mut b = FauxBureau::avec_appli();
+        b.entree = Some(vec![b'y'; 40_007]);
+        assert_eq!(x(&mut b, "taper --fenetre appli-essai -"), trop);
+        assert!(appele(&b, |a| *a == AppelFaux::LireEntree(40_007)));
+        assert!(refuse_a_l_analyse(&b));
+        let mut b = FauxBureau::avec_appli();
+        b.fichiers = vec![(PathBuf::from("b.txt"), vec![b'x'; 40_006])];
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai --fichier b.txt"),
+            Issue::arret(Arret::Usage(
+                "texte trop long : 40006 caractères, 10000 au plus".into()
+            ))
+        );
+        assert!(refuse_a_l_analyse(&b));
+    }
+    // Les touches interdites se jugent sur tous les arguments avant qu'aucun nom ne s'analyse : une
+    // touche inconnue placée avant une interdite ne change ni le code ni le message.
+    #[test]
+    fn interdite_avant_l_inconnue_d_un_autre_argument() {
+        for s in [
+            "touche --fenetre appli-essai Bidule Alt+Tab",
+            "touche --fenetre appli-essai Tab Bidule Win+R",
+            "touche --fenetre appli-essai F13 Alt+F6",
+        ] {
+            let mut b = FauxBureau::avec_appli();
+            let interdite = s.rsplit(' ').next().unwrap_or_default();
+            assert_eq!(
+                x(&mut b, s),
+                Issue::arret(Arret::Refus(format!("touche interdite : {interdite}"))),
+                "{s}"
+            );
+            assert!(aucun_geste(&b), "{s}");
+        }
     }
     #[test]
     fn fenetre_refusee_avant_le_verrou() {
@@ -1696,27 +1938,214 @@ mod tests {
             ]
         );
     }
-    // Une insertion partielle de l'Alt entourant reste un échec du système : une partie du lot est
-    // partie, et ce qui reste enfoncé ne se sait pas.
+    // Une insertion partielle de l'Alt entourant reste un échec du système, après le relâchement
+    // d'Alt gauche, que précède 0xE8 enfoncée puis relâchée : jamais Alt relâchée seule. Que le
+    // début inséré ait aussi enfoncé 0xE8 ou non, le relâchement est le même : la frappe de 0xE8 qui
+    // le commence relâche aussi 0xE8 restée enfoncée. Aucune demande ne suit.
     #[test]
-    fn alt_entourant_insere_en_partie_sort_en_3() {
+    fn alt_entourant_insere_en_partie_relache_puis_sort_en_3() {
+        for k in 1..=3 {
+            let mut b = FauxBureau::avec_appli();
+            b.premier_plan = None;
+            b.accord = Accord::ApresAlt;
+            b.insertions = VecDeque::from([1, k]);
+            assert_eq!(
+                x(&mut b, "activer --fenetre appli-essai"),
+                Issue::arret(Arret::Echec(format!(
+                    "échec du système : SendInput a inséré {k} événements sur 4 ; relâchement : 3 \
+                     sur 3"
+                ))),
+                "{k}"
+            );
+            assert_eq!(
+                gestes(&b),
+                vec![
+                    AppelFaux::Envoi(vec![Evenement::SourisNulle]),
+                    AppelFaux::Demande(IdFenetre(1)),
+                    AppelFaux::Envoi(alt_entourant()),
+                    AppelFaux::Envoi(vec![
+                        t(0xE8, 0, false),
+                        t(0xE8, 0, true),
+                        t(0xA4, 0x38, true)
+                    ]),
+                ],
+                "{k}"
+            );
+        }
+    }
+    // Une combinaison insérée en partie : ce que son début a enfoncé, et pas relâché, se relâche
+    // d'un seul envoi, dans l'ordre inverse de l'enfoncement, sans garde du premier plan, puis la
+    // commande sort en 3 en disant les deux insertions.
+    #[test]
+    fn combinaison_inseree_en_partie_relache_dans_l_ordre_inverse() {
+        let ctrl = |relachee| t(0xA2, 0x1D, relachee);
+        let maj = |relachee| t(0xA0, 0x2A, relachee);
+        let tab = |relachee| t(0x09, 0x0F, relachee);
+        for (k, relachement) in [
+            (1, vec![ctrl(true)]),
+            (2, vec![maj(true), ctrl(true)]),
+            (3, vec![tab(true), maj(true), ctrl(true)]),
+            (4, vec![maj(true), ctrl(true)]),
+            (5, vec![ctrl(true)]),
+        ] {
+            let mut b = FauxBureau::avec_appli();
+            b.insertions = VecDeque::from([k]);
+            let p = relachement.len();
+            assert_eq!(
+                x(&mut b, "touche --fenetre appli-essai Ctrl+Maj+Tab"),
+                Issue::arret(Arret::Echec(format!(
+                    "échec du système : SendInput a inséré {k} événements sur 6 ; relâchement : \
+                     {p} sur {p}"
+                ))),
+                "{k}"
+            );
+            let combinaison = vec![
+                ctrl(false),
+                maj(false),
+                tab(false),
+                tab(true),
+                maj(true),
+                ctrl(true),
+            ];
+            assert_eq!(b.envois(), vec![combinaison, relachement], "{k}");
+            // Le relâchement part juste après l'envoi partiel, sans lecture du premier plan.
+            let apres: Vec<&AppelFaux> = b
+                .appels
+                .iter()
+                .skip_while(|a| !matches!(a, AppelFaux::Envoi(_)))
+                .collect();
+            assert!(
+                matches!(
+                    apres[..],
+                    [
+                        AppelFaux::Envoi(_),
+                        AppelFaux::Envoi(_),
+                        AppelFaux::Ajout(_)
+                    ]
+                ),
+                "{k} : {apres:?}"
+            );
+        }
+    }
+    // Un caractère d'AltGr tapé par la disposition, inséré en partie : 0xE8 enfoncée puis relâchée
+    // précède l'Alt droite relâchée, qui garde son balayage étendu, puis Ctrl gauche.
+    #[test]
+    fn altgr_insere_en_partie_frappe_0xe8_avant_l_alt_droite() {
         let mut b = FauxBureau::avec_appli();
-        b.premier_plan = None;
-        b.accord = Accord::ApresAlt;
-        b.insere_au_plus = Some(2);
+        b.insertions = VecDeque::from([2]);
         assert_eq!(
-            x(&mut b, "activer --fenetre appli-essai"),
+            x(
+                &mut b,
+                "taper --fenetre appli-essai --comme-au-clavier --texte @"
+            ),
+            Issue::arret(Arret::Echec(
+                "échec du système : SendInput a inséré 2 événements sur 6 ; relâchement : 4 sur 4"
+                    .into()
+            ))
+        );
+        let alt_droite_relachee = Evenement::Touche {
+            vk: 0xA5,
+            scan: 0x38,
+            etendue: true,
+            relachee: true,
+        };
+        assert_eq!(
+            b.envois()[1],
+            vec![
+                t(0xE8, 0, false),
+                t(0xE8, 0, true),
+                alt_droite_relachee,
+                t(0xA2, 0x1D, true)
+            ]
+        );
+    }
+    // Une unité UTF-16 insérée en partie se relâche par son unité ; quand le début inséré n'a rien
+    // laissé enfoncé, aucun relâchement ne part, et le message est celui de l'envoi seul.
+    #[test]
+    fn unicode_insere_en_partie_relache_son_unite() {
+        let unicode = |unite, relachee| Evenement::Unicode { unite, relachee };
+        let mut b = FauxBureau::avec_appli();
+        b.insertions = VecDeque::from([3]);
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai --texte 😀"),
+            Issue::arret(Arret::Echec(
+                "échec du système : SendInput a inséré 3 événements sur 4 ; relâchement : 1 sur 1"
+                    .into()
+            ))
+        );
+        assert_eq!(b.envois()[1], vec![unicode(0xDE00, true)]);
+        let mut b = FauxBureau::avec_appli();
+        b.insertions = VecDeque::from([2]);
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai --texte 😀"),
             Issue::arret(Arret::Echec(
                 "échec du système : SendInput a inséré 2 événements sur 4".into()
             ))
         );
+        assert_eq!(b.envois().len(), 1);
+    }
+    // Le relâchement lui-même inséré en partie : la commande sort toujours en 3, et le message dit
+    // combien de relâchements sont partis.
+    #[test]
+    fn relachement_insere_en_partie_sort_en_3() {
+        let mut b = FauxBureau::avec_appli();
+        b.insertions = VecDeque::from([2, 1]);
         assert_eq!(
-            gestes(&b),
-            vec![
-                AppelFaux::Envoi(vec![Evenement::SourisNulle]),
-                AppelFaux::Demande(IdFenetre(1)),
-                AppelFaux::Envoi(alt_entourant()),
-            ]
+            x(&mut b, "touche --fenetre appli-essai Ctrl+Maj+Tab"),
+            Issue::arret(Arret::Echec(
+                "échec du système : SendInput a inséré 2 événements sur 6 ; relâchement : 1 sur 2"
+                    .into()
+            ))
+        );
+        assert_eq!(b.envois().len(), 2);
+    }
+    // Pendant la frappe, un envoi que Windows n'insère pas du tout se juge au premier plan relu :
+    // une fenêtre qui l'a pris fait sortir en 1, avec le compte des unités parties avant lui.
+    #[test]
+    fn zero_insere_pendant_la_frappe_quand_le_premier_plan_change_sort_en_1() {
+        let mut b = FauxBureau::avec_appli();
+        b.insertions = VecDeque::from([2, 2, 0]);
+        b.vol = Some((3, pp(50, 555, vec![])));
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai --texte abcde"),
+            Issue::arret(Arret::Refus(
+                "le premier plan a changé : 2 unités sur 5 sont parties".into()
+            ))
+        );
+        assert_eq!(b.envois().len(), 3);
+    }
+    // Le premier plan relu encore accepté, un envoi que Windows n'insère pas du tout reste un échec
+    // du système : rien n'explique le refus.
+    #[test]
+    fn zero_insere_pendant_la_frappe_premier_plan_accepte_sort_en_3() {
+        let mut b = FauxBureau::avec_appli();
+        b.insertions = VecDeque::from([2, 0]);
+        assert_eq!(
+            x(&mut b, "taper --fenetre appli-essai --texte abc"),
+            Issue::arret(Arret::Echec(
+                "échec du système : SendInput a inséré 0 événements sur 2".into()
+            ))
+        );
+        assert_eq!(b.envois().len(), 2);
+        assert!(
+            b.appels.ends_with(&[
+                AppelFaux::Envoi(vec![
+                    Evenement::Unicode {
+                        unite: 0x62,
+                        relachee: false
+                    },
+                    Evenement::Unicode {
+                        unite: 0x62,
+                        relachee: true
+                    }
+                ]),
+                AppelFaux::PremierPlan,
+                AppelFaux::Processus,
+                AppelFaux::PremierPlan,
+                AppelFaux::Ajout(format!("{TETE}taper\tappli-essai\t3\t3\n")),
+            ]),
+            "{:?}",
+            b.appels
         );
     }
     #[test]
@@ -2088,11 +2517,13 @@ mod tests {
             assert_eq!(
                 x(&mut b, "touche --fenetre appli-essai Tab"),
                 Issue::arret(Arret::Echec(
-                    "échec du système : SendInput a inséré 1 événements sur 2".into()
+                    "échec du système : SendInput a inséré 1 événements sur 2 ; relâchement : 1 \
+                     sur 1"
+                        .into()
                 )),
                 "réglage {n}"
             );
-            assert_eq!(b.envois().len(), 1, "réglage {n}");
+            assert_eq!(b.envois().len(), 2, "réglage {n}");
             assert!(b.journal.is_empty(), "réglage {n}");
         }
     }

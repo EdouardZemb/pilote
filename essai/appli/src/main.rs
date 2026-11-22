@@ -1,7 +1,8 @@
 //! L'application d'essai de `pilote` : la cible des essais de bout en bout, sous Windows. Elle
 //! reçoit `<dossier WebView2> <fichier d'événements>`, puis ses options, et ouvre la fenêtre
 //! « Appli d'essai », dont la page dit chaque événement dans le fichier, une ligne par événement,
-//! `<titre de la fenêtre>\t<JSON>`. `appli-essai --tenir-le-verrou <fichier>` est un mode à part,
+//! `<titre de la fenêtre>\t<JSON>` ; la boucle y dit de même chaque touche que reçoit une fenêtre
+//! elle-même, hors de sa page. `appli-essai --tenir-le-verrou <fichier>` est un mode à part,
 //! sans fenêtre, qui tient le verrou des gestes. Ailleurs que sous Windows, elle dit qu'elle n'y
 //! tourne pas, et sort en 64.
 
@@ -34,8 +35,9 @@ mod fenetre {
         rc::Rc,
         time::{Duration, Instant},
     };
-    use tao::event::{Event, WindowEvent};
+    use tao::event::{ElementState, Event, WindowEvent};
     use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
+    use tao::keyboard::Key;
     use tao::platform::windows::WindowExtWindows;
     use tao::window::{Window, WindowBuilder, WindowId};
     use windows::Win32::Foundation::{HWND, WAIT_ABANDONED, WAIT_OBJECT_0};
@@ -203,6 +205,28 @@ mod fenetre {
                 Event::UserEvent(Ordre::Touche) if permettre => {
                     permettre_le_premier_plan(&journal);
                 }
+                // Une touche reçue par la fenêtre elle-même, avant que wry ait porté le focus dans la
+                // WebView2 : la page ne la voit jamais, et seule cette ligne la dit. Une touche que
+                // tao fabrique à un changement de focus, d'après l'état du clavier, n'a été reçue
+                // par personne, et ne s'écrit pas.
+                Event::WindowEvent {
+                    window_id,
+                    event:
+                        WindowEvent::KeyboardInput {
+                            event,
+                            is_synthetic: false,
+                            ..
+                        },
+                    ..
+                } => {
+                    if let Some((fenetre, _)) = ouvertes.get(&window_id) {
+                        let corps = regles::touche_fenetre(
+                            &nom_de_touche(&event.logical_key),
+                            event.state == ElementState::Pressed,
+                        );
+                        ecrire(&journal, &regles::ligne(&fenetre.title(), &corps));
+                    }
+                }
                 Event::WindowEvent {
                     window_id,
                     event: WindowEvent::CloseRequested,
@@ -291,6 +315,15 @@ mod fenetre {
         // SAFETY: l'appel ne prend qu'un entier.
         let accorde = unsafe { AllowSetForegroundWindow(ASFW_ANY) }.is_ok();
         ecrire(journal, &regles::ligne(TITRE, &regles::permis(accorde)));
+    }
+
+    /// Le nom de la touche logique `touche` : son texte pour un caractère, son nom pour une touche
+    /// nommée (`Tab`, `Enter`, `Escape`), ou ce que tao en dit sinon.
+    fn nom_de_touche(touche: &Key<'static>) -> String {
+        match touche {
+            Key::Character(texte) => (*texte).to_string(),
+            autre => format!("{autre:?}"),
+        }
     }
 
     /// Le handle Win32 de `fenetre`.
@@ -402,8 +435,8 @@ mod fenetre {
 
 /// Les règles de l'application qui ne demandent aucune fenêtre : la lecture des arguments, la
 /// forme des lignes du fichier d'événements, le tri des messages de la page et le compte des
-/// saisies que guette le voleur. Elles se compilent et se testent sans Windows ; leurs tests, comme
-/// tout test hors du domaine de `pilote`, ne tournent qu'en CI.
+/// saisies que guette le voleur. Elles se compilent sans Windows ; leurs tests portent `#[ignore]`,
+/// comme tout test hors du domaine, et ne tournent qu'à l'étape de la sentinelle du job `windows`.
 #[cfg(any(windows, test))]
 mod regles {
     use std::ffi::OsStr;
@@ -556,6 +589,40 @@ mod regles {
     pub fn permis(accorde: bool) -> String {
         let valeur = if accorde { "vrai" } else { "faux" };
         format!("{{\"genre\":\"permis\",\"valeur\":\"{valeur}\"}}")
+    }
+
+    /// Le corps de la ligne qui dit une touche reçue par une fenêtre elle-même, hors de sa page :
+    /// `{"genre":"touche-fenetre","key":<touche>,"etat":"enfoncee"}`, ou `"relachee"`, la touche
+    /// échappée comme `JSON.stringify` échappe les lignes de la page.
+    pub fn touche_fenetre(touche: &str, enfoncee: bool) -> String {
+        let etat = if enfoncee { "enfoncee" } else { "relachee" };
+        format!(
+            "{{\"genre\":\"touche-fenetre\",\"key\":{},\"etat\":\"{etat}\"}}",
+            chaine_json(touche)
+        )
+    }
+
+    /// `texte` en chaîne JSON, guillemets compris, comme l'écrit `JSON.stringify` : le guillemet et
+    /// la barre oblique inverse précédés d'une barre, cinq caractères de contrôle par leur lettre
+    /// (`\b`, `\f`, `\n`, `\r`, `\t`), tout autre caractère de contrôle C0 en `\u00xx`, en
+    /// minuscules, et le reste tel quel.
+    fn chaine_json(texte: &str) -> String {
+        let mut sortie = String::from("\"");
+        for c in texte.chars() {
+            match c {
+                '"' => sortie.push_str("\\\""),
+                '\\' => sortie.push_str("\\\\"),
+                '\u{8}' => sortie.push_str("\\b"),
+                '\u{c}' => sortie.push_str("\\f"),
+                '\n' => sortie.push_str("\\n"),
+                '\r' => sortie.push_str("\\r"),
+                '\t' => sortie.push_str("\\t"),
+                c if u32::from(c) < 0x20 => sortie.push_str(&format!("\\u{:04x}", u32::from(c))),
+                c => sortie.push(c),
+            }
+        }
+        sortie.push('"');
+        sortie
     }
 
     /// Un message de la page, reçu par l'IPC.
@@ -844,6 +911,26 @@ mod regles {
         fn permis_dit_vrai_ou_faux() {
             assert_eq!(permis(true), "{\"genre\":\"permis\",\"valeur\":\"vrai\"}");
             assert_eq!(permis(false), "{\"genre\":\"permis\",\"valeur\":\"faux\"}");
+        }
+
+        /// Une touche reçue par la fenêtre se dit comme la page dit les siennes : le genre, la
+        /// touche échappée comme par `JSON.stringify`, puis son état.
+        #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]
+        #[test]
+        fn une_touche_de_la_fenetre_se_dit_en_json() {
+            assert_eq!(
+                touche_fenetre("a", true),
+                "{\"genre\":\"touche-fenetre\",\"key\":\"a\",\"etat\":\"enfoncee\"}"
+            );
+            assert_eq!(
+                touche_fenetre("Tab", false),
+                "{\"genre\":\"touche-fenetre\",\"key\":\"Tab\",\"etat\":\"relachee\"}"
+            );
+            assert_eq!(
+                touche_fenetre("\"\\\u{8}\u{c}\n\r\t\u{1}é", true),
+                "{\"genre\":\"touche-fenetre\",\"key\":\"\\\"\\\\\\b\\f\\n\\r\\t\\u0001é\",\
+                 \"etat\":\"enfoncee\"}"
+            );
         }
 
         #[ignore = "hors du domaine de pilote : la sentinelle de la CI le lance"]

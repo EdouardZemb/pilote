@@ -1,9 +1,10 @@
-//! La liste de refus (ADR-0002) : les fenêtres où `pilote` ne fait rien. Une fenêtre est refusée
-//! quand son processus, ou le processus d'une de ses fenêtres enfants qu'un autre processus porte,
-//! est l'un de `REFUSES` ; et le cadre d'une application du Store (`CLASSE_CADRE`) l'est quand son
-//! AUMID est celui des Paramètres, ou quand il n'en a pas et qu'aucun enfant d'un autre processus ne
-//! se lit : réduit, le cadre des Paramètres ne garde que ses propres filles. Rien ne configure cette
-//! liste. KeePassXC a sa propre règle, que `gestes` juge pour `touche` et `taper` (décision 3).
+//! La liste de refus (ADR-0005, « La liste de refus ») : les fenêtres où `pilote` ne fait rien. Une
+//! fenêtre est refusée quand son processus, ou le processus d'une de ses fenêtres enfants qu'un
+//! autre processus porte, est l'un de `REFUSES` ; et le cadre d'une application du Store
+//! (`CLASSE_CADRE`) l'est quand son AUMID est celui des Paramètres, ou quand il n'en a pas et
+//! qu'aucun enfant d'un autre processus ne se lit : réduit, le cadre des Paramètres ne garde que ses
+//! propres filles. Rien ne configure cette liste. KeePassXC a sa propre règle, que `gestes` juge
+//! pour `touche` et `taper` (décision 3).
 
 use crate::domaine::fenetre::FenetreLue;
 use crate::domaine::processus::Processus;

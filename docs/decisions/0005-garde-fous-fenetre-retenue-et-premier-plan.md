@@ -124,12 +124,16 @@ quelle que soit l'application.
 Les gestes activent la fenêtre d'eux-mêmes, puis vérifient le premier plan avant chaque unité :
 chaque combinaison, chaque caractère, et, aux tranches suivantes, chaque clic, chaque cran et chaque
 appel de l'automatisation. Une fenêtre qui vole le premier plan arrête la frappe (1, « le premier
-plan a changé : <k> unités sur <n> sont parties »).
+plan a changé : <k> unités sur <n> sont parties »). Cette garde a une limite, inhérente à Win32 :
+entre le dernier contrôle du premier plan et le moment où Windows traite l'envoi, une unité peut
+encore partir vers une fenêtre qui vient de voler le premier plan. C'est la fenêtre résiduelle
+d'une unité : aucun contrôle fait avant l'envoi ne la ferme, et la garde arrête l'unité suivante.
 
 Pour `activer`, `touche` et `taper`, dans cet ordre, une position un test :
 
-1. l'analyse, qui ne lit aucune fenêtre : l'usage (64), une touche interdite (1), une touche
-   inconnue (64), le texte lu, décodé et borné (64) ;
+1. l'analyse, qui ne lit aucune fenêtre : l'usage (64), une touche interdite, jugée sur tous les
+   arguments (1), puis une touche inconnue (64), le texte lu (40 007 octets au plus), décodé, sans
+   caractère de contrôle, non vide et borné (64) ;
 2. le journal, qu'exige toute commande valide (1) ;
 3. la fenêtre retenue : refusée (1), absente (2), plusieurs (2) ; puis, pour `touche` et `taper`,
    la règle de KeePassXC (1) ;
@@ -140,14 +144,17 @@ Pour `activer`, `touche` et `taper`, dans cet ordre, une position un test :
 8. pour `taper --comme-au-clavier` seulement, Verr. Maj allumée (1) ; `touche barre` et `touche
    interrogation` n'y sont pas soumis ;
 9. l'activation (1 si Windows refuse le premier plan ou qu'une touche de modification reste
-   enfoncée ; 3 si un envoi n'est inséré qu'en partie) ;
+   enfoncée ; 3 si un envoi n'est inséré qu'en partie, après le relâchement tenté) ;
 10. le refus, puis, pour `touche` et `taper`, la règle de KeePassXC, jugés de nouveau sur W relue
     (1, ou 2 si W a disparu) ; `activer` s'arrête là, et écrit la ligne de W ;
 11. les touches de modification, de nouveau (1) ;
 12. tous les lots de la frappe, calculés avant le premier envoi : un caractère refusé n'en laisse
     partir aucun (1) ;
-13. pour chaque unité : le premier plan accepté (1), l'envoi d'un seul tenant (3 si Windows n'en
-    insère pas tous les événements), puis la cadence.
+13. pour chaque unité : le premier plan accepté (1), l'envoi d'un seul tenant, puis la cadence. Un
+    envoi que Windows n'insère pas du tout se juge au premier plan relu : 1, « le premier plan a
+    changé », s'il n'est plus accepté, puisque UIPI bloque sans erreur l'envoi vers une fenêtre plus
+    élevée qui vient de le prendre ; 3 s'il l'est encore. Un envoi inséré en partie sort en 3, après
+    le relâchement tenté (« Les lots »).
 
 Un refus d'avant l'activation n'a rien restauré, rien demandé, rien envoyé. Aux tranches suivantes :
 pour `clic` et `molette`, le point tombe dans la zone cliente, et la fenêtre de premier niveau sous
@@ -172,15 +179,28 @@ exécutable dont le nom est dans la liste de refus (1), puis prend le verrou et 
   refusé le premier plan ».
 - Un de ces deux envois que Windows n'insère pas du tout (UIPI le bloque sans erreur quand une
   fenêtre plus élevée a le premier plan) ne fait pas sortir : l'activation suit son cours et se juge
-  au premier plan relu. Inséré en partie, il sort en 3.
+  au premier plan relu. Inséré en partie, il sort en 3, après le relâchement tenté (« Les lots »).
 - Activer ne frappe jamais Alt seule, qui ouvre le mode menu d'une fenêtre Win32 déjà au premier
   plan et y perd le caractère suivant.
 
 **Les lots.** Chaque lot d'événements relâche tout ce qu'il enfonce, dans l'ordre inverse ; `pilote`
-ne frappe jamais Alt seule, ni aucune touche hors d'un lot qu'il a formé. Une combinaison (les
+ne frappe jamais Alt seule, ni aucune touche hors d'un lot qu'il a formé, sauf le relâchement
+qui suit. Une combinaison (les
 modificateurs enfoncés, la touche, les modificateurs relâchés) et un caractère tapé par la
 disposition du clavier partent en un seul envoi : le premier plan se vérifie avant elle, jamais au
 milieu.
+
+Un envoi que Windows n'insère qu'en partie a enfoncé, dans son début, des touches que sa fin devait
+relâcher : `SendInput` insère dans l'ordre. Elles resteraient enfoncées pour tout le poste, les
+frappes de la personne deviendraient des raccourcis, et `pilote` se bloquerait lui-même sur « touche
+de modification enfoncée ». `pilote` tente donc de les relâcher, en un seul envoi sans garde du
+premier plan, puisque des relâchements ne tapent rien : les touches et les unités UTF-16 que le
+début inséré a laissées enfoncées, dans l'ordre inverse de leur enfoncement. Quand une Alt, gauche
+ou droite, en est, 0xE8 enfoncée puis relâchée les précède, pour qu'aucune Alt ne se relâche seule.
+Puis il sort en 3, « échec du système : SendInput a inséré <k> événements sur <n> ; relâchement :
+<m> sur <p> », ou sans la seconde moitié quand le début inséré n'a rien laissé enfoncé. Ce
+relâchement est tenté, sans garantie : ce qui a refusé la fin du lot, comme un bureau sécurisé, peut
+le refuser aussi.
 
 **La cadence.** Après chaque unité, `pilote` attend 5 ms (`CADENCE`) avant de vérifier le premier
 plan pour la suivante. Sans elle, des milliers d'événements partiraient en une fraction de seconde,
@@ -209,16 +229,27 @@ compte.
 
 **Une touche de modification enfoncée** (Maj, Ctrl, Alt ou Windows, de chaque côté) fait refuser
 (1) : elle s'ajouterait à chaque touche frappée. Elle se lit avant l'activation, puis de nouveau
-après elle pour `touche` et `taper`.
+après elle pour `touche` et `taper`, jamais pendant la frappe : une touche que la personne enfonce
+pendant un long `taper` s'ajoute aux unités qui suivent, et change les caractères en raccourcis.
+C'est une limite, que seule une lecture avant chaque unité fermerait.
 
 **Les touches interdites** : la touche Windows et ses combinaisons, Ctrl+Alt+Suppr, Alt+Tab, et
 toute touche qui change de fenêtre, qui ferait sortir la frappe de la fenêtre retenue ; Alt+F4 reste
 permis. Sur les noms de touches que l'analyse connaît aujourd'hui, la règle prend cette forme : la
-touche Windows, dans tout morceau d'une combinaison, Alt+Tab, Ctrl+Alt+Suppr, Alt ou Ctrl avec
-Echap. Ces touches se reconnaissent à l'analyse, sous toute casse et dans tout ordre, avant tout nom
-inconnu (1, « touche interdite : <touche> »). Cette liste n'épuise pas la règle : une tranche qui
-ajoute un nom de touche le juge contre elle, et une touche dont on apprend qu'elle change de
-fenêtre rejoint la liste, avec son test.
+touche Windows, dans tout morceau d'une combinaison, Alt+Tab, Alt+F6, qui passe d'une fenêtre à
+l'autre d'un même programme, Ctrl+Alt+Suppr, Alt ou Ctrl avec Echap, quels que soient les autres
+modificateurs. Ces touches se reconnaissent à l'analyse, sous toute casse et dans tout ordre, sur
+tous les arguments avant qu'aucun nom ne s'analyse : une touche inconnue, même placée avant, ne
+cache pas une interdite (1, « touche interdite : <touche> »). Cette liste n'épuise pas la règle :
+une tranche qui ajoute un nom de touche le juge contre elle, et une touche dont on apprend qu'elle
+change de fenêtre rejoint la liste, avec son test.
+
+Un raccourci global du poste échappe à cette liste : le raccourci d'un `.lnk` du Bureau ou du menu
+Démarrer, une touche que réserve `RegisterHotKey`, la saisie automatique globale d'un coffre. Il
+prend la frappe avant W, et la garde du premier plan n'arrête que l'unité suivante : une dernière
+unité prise ainsi sort en 0. C'est une limite. `Ctrl+Alt+<lettre>`, la forme habituelle de ces
+raccourcis, reste admis, comme le veut la grammaire d'ADR-0006 ; sous la disposition française,
+c'est AltGr, qui tape un caractère.
 
 **Aucun `SetValue`** : un champ se remplit en tapant, et le contrôle statique refuse ce mot dans les
 sources.
@@ -247,8 +278,7 @@ par appel, un appel refusé ou mal formé compris, formée en mémoire puis ajou
   lue sur le seul premier argument dans une liste fermée, les 21 du lot puis `aide` et `version`,
   `inconnue` pour tout autre mot ; le nom du processus de W, sans `.exe`, un nom lu du système ; le
   code de sortie ; la longueur du texte de `taper`, en caractères. Un champ absent reste vide.
-- Aucun champ ne peut porter un texte tapé : ni une option, ni un texte ne passent au journal, et
-  `--fenetre` refuse un caractère de contrôle et plus de 260 caractères (64).
+- Aucun champ ne peut porter un texte tapé : ni une option, ni un texte ne passent au journal.
 - **Son ouverture.** Une commande valide exige le journal avant toute lecture de fenêtre et tout
   geste (1, « journal inaccessible : ouvert dans une autre application ? »). L'aide, la version et
   un refus de l'analyse y écrivent leur ligne s'il s'ouvre, sans que son échec change leur code.
@@ -282,6 +312,8 @@ change) : une serrure fragile tromperait, et la règle reste dans la compétence
 
 ### Ce qui précise ou change le plan de la tranche
 
+Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
+
 - La restauration part par `ShowWindowAsync`, et la sonde d'`activer` attend qu'elle soit faite :
   `ShowWindow` attendrait que le fil de l'autre application traite son message, et une application
   figée bloquerait `pilote`, qui tient le verrou des gestes.
@@ -307,6 +339,23 @@ change) : une serrure fragile tromperait, et la règle reste dans la compétence
   Limite connue : `SendInput` rend aussi 0 pour une faute de l'outil (un paramètre invalide), que
   rien ne distingue d'un refus de Windows, puisque `GetLastError` n'est pas lu : elle sort donc
   aussi en 1.
+- Pendant la frappe, de même, un envoi que Windows n'insère pas du tout se juge au premier plan
+  relu : 1, « le premier plan a changé : <k> unités sur <n> sont parties », s'il n'est plus
+  accepté ; 3 s'il l'est encore, rien n'expliquant alors le refus.
+- Un envoi inséré en partie relâche au mieux ce que son début a enfoncé, puis sort en 3 en le
+  disant (« Les lots ») : sans ce relâchement, une touche de modification resterait enfoncée pour
+  tout le poste, et `pilote` refuserait ensuite tout geste jusqu'à un geste de la personne. Le
+  relâchement est tenté, sans garantie.
+- Alt+F6 rejoint les touches interdites, quels que soient les autres modificateurs : il passe d'une
+  fenêtre à l'autre d'un même programme, et la garde du premier plan n'arrête que l'unité qui le
+  suit. F6, Ctrl+F6 et Maj+F6 restent permis.
+- Les touches interdites se jugent sur tous les arguments de `touche` avant qu'aucun nom ne
+  s'analyse : l'ordre des arguments ne change ni le code ni le message.
+- Trois limites, déclarées chacune à sa place : un raccourci global du poste prend la frappe avant
+  W (« Les touches interdites ») ; une unité peut encore partir vers une fenêtre qui vient de voler
+  le premier plan, entre le dernier contrôle et l'envoi (« Les gestes et l'ordre des gardes ») ; les
+  touches de modification ne se lisent pas pendant la frappe (« Une touche de modification
+  enfoncée »).
 - La cadence observée sur le runner : un `taper` interrompu après au moins 100 unités a duré
   969 ms, soit de l'ordre de 10 ms par unité, un instantané des processus étant relu pour chacune ;
   un `taper` de 10 000 caractères dure donc de l'ordre de 100 s : les 5 ms de `CADENCE` ne sont
