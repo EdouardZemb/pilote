@@ -13,7 +13,7 @@ l'automatisation de Windows et capture la seule fenêtre visée. Il sert d'abord
 et aux contrôles d'accessibilité des projets d'Edouard. Il ne lit ni ne tape jamais un secret, ne
 capture jamais l'écran entier, et ne remplace pas Claude in Chrome pour une page web.
 
-L'état du projet est dans [CLAUDE.md](CLAUDE.md#état), les versions dans [les publications](https://github.com/EdouardZemb/pilote/releases).
+L'état du projet est dans [CLAUDE.md](CLAUDE.md#état).
 
 ## Démarrer
 
