@@ -144,6 +144,15 @@ impl Issue {
         }
     }
 
+    /// Fait, ces lignes, et un avis sur la sortie d'erreur.
+    pub fn avis(sortie: Vec<String>, avis: String) -> Issue {
+        Issue {
+            code: Code::Fait,
+            sortie,
+            erreur: Some(avis),
+        }
+    }
+
     /// La commande s'arrête : le code de l'arrêt, sans sortie, l'erreur étant son message.
     pub fn arret(a: Arret) -> Issue {
         Issue {
@@ -285,6 +294,17 @@ mod tests {
                 code: Code::Refus,
                 sortie: vec![],
                 erreur: Some("poste verrouillé".into())
+            }
+        );
+    }
+    #[test]
+    fn issue_avis_garde_sa_sortie() {
+        assert_eq!(
+            Issue::avis(vec!["a".into()], "b".into()),
+            Issue {
+                code: Code::Fait,
+                sortie: vec!["a".into()],
+                erreur: Some("b".into())
             }
         );
     }
