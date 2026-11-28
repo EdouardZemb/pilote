@@ -734,6 +734,36 @@ mod tests {
             x.hors = true;
         }
         assert!(document_vide(&a));
+        // Une fenêtre que W possède, d'un processus refusé, paraît avant les enfants ordinaires de W ;
+        // de type `Pane`, elle n'est pas un dialogue `Window`, et son Document passe avant la page.
+        // Écarté avec elle, ce Document n'est pas celui de la page : pris pour elle, il la ferait
+        // juger vide, et chaque lecture attendrait l'échéance entière.
+        let ecarte = |x: ElementLu| ElementLu { hors: true, ..x };
+        assert!(!document_vide(&[
+            w(),
+            ecarte(ElementLu {
+                fenetre: true,
+                pid: 300,
+                ..e(Some(0), VOLET, "Invite")
+            }),
+            ecarte(e(Some(1), DOCUMENT, "")),
+            ecarte(e(Some(2), 50_000, "B")),
+            e(Some(0), VOLET, ""),
+            e(Some(4), DOCUMENT, ""),
+            e(Some(5), 50_000, "B"),
+        ]));
+        // Le seul enfant de la page est écarté : la page n'a aucun enfant qui compte.
+        assert!(document_vide(&[
+            w(),
+            e(Some(0), VOLET, ""),
+            e(Some(1), DOCUMENT, ""),
+            ecarte(ElementLu {
+                fenetre: true,
+                pid: 300,
+                ..e(Some(2), VOLET, "")
+            }),
+            ecarte(e(Some(3), 50_000, "B")),
+        ]));
     }
 
     #[test]
