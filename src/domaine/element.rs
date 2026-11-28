@@ -6,13 +6,15 @@
 //! de sortie »).
 //!
 //! L'arbre d'une fenêtre arrive en une liste plate, la fenêtre en tête (indice 0, la racine), en
-//! ordre de document : le parent d'un élément le précède. Le domaine ne nomme aucune interface de
+//! ordre de document : le parent d'un élément le précède. `verifier_la_forme` le vérifie avant tout
+//! jugement, et les autres fonctions supposent cette forme. Le domaine ne nomme aucune interface de
 //! l'automatisation : il ne reçoit que des `ElementLu` et des codes. Chaque fonction traite un
 //! élément `hors` comme absent, sauf `ancetres` et `profondeur`, qui ne jugent rien.
 
 use crate::domaine::sortie::Arret;
 use crate::domaine::sortie::Ligne;
 use crate::domaine::sortie::echapper;
+use crate::domaine::sortie::echec;
 use std::iter;
 
 /// Un élément lu. Chaque `Option` d'un motif est `Some` si et seulement si l'élément offre ce motif :
@@ -20,7 +22,11 @@ use std::iter;
 /// ligne ne porte `valeur` que pour lui) ; `defile`, Scroll ; et `invocable`, Invoke. `fenetre` :
 /// l'élément est une fenêtre (un HWND natif non nul). `hors` : écarté par `borner`, jamais posé par
 /// la couche.
-#[derive(Clone, Debug, PartialEq, Default)]
+// Le défaut n'existe qu'aux tests : `motdepasse` et `fenetre` faux, et le processus 0, diraient « pas
+// un mot de passe » et « pas une fenêtre » pour un champ que la couche aurait oublié, ce que le
+// domaine ne peut pas voir. La couche pose donc chaque champ.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(Default))]
 pub struct ElementLu {
     pub parent: Option<usize>,
     pub genre: i32,
@@ -150,9 +156,32 @@ pub fn type_de_nom(nom: &str) -> Option<i32> {
         .map(|(g, _)| g)
 }
 
-/// Les ancêtres de l'élément `i`, du parent à la racine.
+/// Vérifie la forme de l'arbre que rend la couche : une liste non vide, la racine à l'indice 0,
+/// sans parent, et chaque autre élément avec un parent qui le précède. Chaque lecture de l'arbre
+/// l'appelle avant `borner` et avant tout jugement ; les autres fonctions du module supposent cette
+/// forme, et rien ne s'y juge sans elle : un élément non racine sans parent échapperait à `borner`
+/// avec son sous-arbre. Une autre liste est une faute de la couche, un échec du système.
+pub fn verifier_la_forme(arbre: &[ElementLu]) -> Result<(), Arret> {
+    let racine = arbre.first().is_some_and(|r| r.parent.is_none());
+    let parents = arbre
+        .iter()
+        .enumerate()
+        .skip(1)
+        .all(|(i, e)| e.parent.is_some_and(|p| p < i));
+    if racine && parents {
+        Ok(())
+    } else {
+        Err(echec("arbre de l'automatisation mal formé"))
+    }
+}
+
+/// Les ancêtres de l'élément `i`, du parent à la racine. Un parent ne se suit que s'il précède
+/// l'élément courant, et la remontée s'arrête sinon : même sur une liste mal formée (un cycle, un
+/// parent hors de la liste), la liste rendue est finie, sans panique.
 pub fn ancetres(arbre: &[ElementLu], i: usize) -> Vec<usize> {
-    iter::successors(arbre[i].parent, |&p| arbre[p].parent).collect()
+    iter::successors(Some(i), |&k| arbre[k].parent.filter(|&p| p < k))
+        .skip(1)
+        .collect()
 }
 
 /// La profondeur de l'élément `i` : 0 pour la racine, le nombre de ses ancêtres sinon.
@@ -214,7 +243,8 @@ pub fn dans_de(arbre: &[ElementLu], i: usize) -> Option<&str> {
 /// processus, et sur tout son sous-arbre (ADR-0005, « Ce qu'on lit reste dans la fenêtre retenue »).
 /// Un élément qui n'est pas une fenêtre ne se juge pas par son processus : il vit dans la fenêtre
 /// qui le contient, et un élément de WebView2 porte celui de `msedgewebview2`, un descendant de P.
-/// Le sous-arbre se suit par les parents, sans dépendre de l'ordre de la liste.
+/// Le sous-arbre se suit par les ancêtres de chaque élément, sur la forme que vérifie
+/// `verifier_la_forme`.
 pub fn borner(arbre: &mut [ElementLu], admis: impl Fn(u32) -> bool) {
     let refusee = |k: usize| {
         let e = &arbre[k];
@@ -234,10 +264,11 @@ pub fn borner(arbre: &mut [ElementLu], admis: impl Fn(u32) -> bool) {
 /// ou aucun élément n'est d'un type hors de `Window`, `Pane` et `TitleBar`, le sous-arbre d'une
 /// `TitleBar` ne comptant pas. Le `Document` de la page est le premier, en ordre de document, qui
 /// n'a aucun ancêtre `Window` autre que la racine : un dialogue que W possède passe avant la page.
-/// Ce premier n'a aucun ancêtre `Document` : un tel ancêtre le précéderait en ordre de document, et
-/// répondrait avant lui. Un `Document` vide sous celui de la page ne rend pas l'arbre vide. Un élément
-/// écarté ne compte nulle part : ni comme `Document` de la page, ni comme son enfant, ni comme
-/// élément qui compte.
+/// Ce premier n'a aucun ancêtre `Document` : sur la forme que vérifie `verifier_la_forme`, un tel
+/// ancêtre le précéderait dans la liste, et répondrait avant lui. Le choix du premier suppose aussi
+/// l'ordre de document entre frères, celui où la couche lit l'arbre. Un `Document` vide sous celui
+/// de la page ne rend pas l'arbre vide. Un élément écarté ne compte nulle part : ni comme
+/// `Document` de la page, ni comme son enfant, ni comme élément qui compte.
 pub fn document_vide(arbre: &[ElementLu]) -> bool {
     let page = (0..arbre.len()).find(|&k| {
         !arbre[k].hors
@@ -278,12 +309,12 @@ fn champ_non_vide(champs: &mut Vec<(&'static str, String)>, cle: &'static str, t
 /// toujours ; `dans` demande la clé `dans` ; `rang` donne la clé `rang`.
 ///
 /// Un nom vide n'a pas de chevrons ; un `id`, une `classe`, un `raccourci` ou un `acces` vides n'ont
-/// pas leur clé. `motdepasse=oui` s'écrit, sans aucune valeur, si `marque` est vrai ou si le cache
-/// marque l'élément ; sinon `valeur` ne paraît que pour un élément qui offre le motif Value et dont
-/// la valeur est donnée, `valeur=""` si elle est vide (ADR-0005, « Les valeurs secrètes ne sortent
-/// jamais »). `annonce` vaut `polite` (1) ou `assertive` (2), absente sinon ; `etat` suit `etats`,
-/// absent s'il n'y en a aucun ; `dans`, s'il est demandé, nomme `dans_de`, absent s'il ne nomme
-/// rien.
+/// pas leur clé. `motdepasse=oui` s'écrit, sans aucune valeur, pour tout élément marqué, qu'il offre
+/// le motif Value ou non : si `marque` est vrai ou si le cache le marque. Sinon `valeur` ne paraît
+/// que pour un élément qui offre le motif Value et dont la valeur est donnée, `valeur=""` si elle
+/// est vide (ADR-0005, « Les valeurs secrètes ne sortent jamais »). `annonce` vaut `polite` (1) ou
+/// `assertive` (2), absente sinon ; `etat` suit `etats`, absent s'il n'y en a aucun ; `dans`, s'il
+/// est demandé, nomme `dans_de`, absent s'il ne nomme rien.
 pub fn ligne_d_element(
     arbre: &[ElementLu],
     i: usize,
@@ -335,14 +366,10 @@ pub fn arret_uia(e: &ErreurUia) -> Arret {
         UIA_DISPARU | RPC_DECONNECTE | OBJET_DECONNECTE => {
             Arret::Introuvable("l'élément a disparu".to_string())
         }
-        UIA_DELAI => {
-            Arret::Echec("échec du système : délai de l'automatisation dépassé".to_string())
-        }
-        UIA_INACTIF => Arret::Echec("échec du système : l'élément est inactif".to_string()),
-        UIA_NON_PRIS | UIA_OPERATION_INVALIDE => {
-            Arret::Echec("échec du système : l'élément refuse le geste".to_string())
-        }
-        _ => Arret::Echec(format!("échec du système : {}", echapper(&e.texte))),
+        UIA_DELAI => echec("délai de l'automatisation dépassé"),
+        UIA_INACTIF => echec("l'élément est inactif"),
+        UIA_NON_PRIS | UIA_OPERATION_INVALIDE => echec("l'élément refuse le geste"),
+        _ => echec(&echapper(&e.texte)),
     }
 }
 
@@ -594,6 +621,22 @@ mod tests {
             marque_a_la_lecture,
             "[Edit] <Champ> id=champ motdepasse=oui"
         );
+        // Un élément marqué qui n'offre pas le motif Value le dit aussi, qu'il soit marqué en cache
+        // ou par l'appelant : le marquage ne dépend pas du motif.
+        let sans_value = |motdepasse| {
+            vec![ElementLu {
+                motdepasse,
+                ..e(None, 50_025, "Secret")
+            }]
+        };
+        assert_eq!(
+            ligne(&sans_value(true), 0, None, false, false, None),
+            "[Custom] <Secret> motdepasse=oui"
+        );
+        assert_eq!(
+            ligne(&sans_value(false), 0, None, true, false, None),
+            "[Custom] <Secret> motdepasse=oui"
+        );
     }
 
     #[test]
@@ -676,6 +719,51 @@ mod tests {
         // La racine ne compte pas, même nommée et d'un autre type que Window.
         let r = vec![e(None, VOLET, "Racine"), e(Some(0), 50_000, "B")];
         assert_eq!(dans_de(&r, 1), None);
+    }
+
+    // La couche doit rendre la racine à l'indice 0, sans parent, et chaque autre élément avec un
+    // parent qui le précède : toute autre liste est un échec du système, avant tout jugement.
+    #[test]
+    fn verifier_la_forme_refuse_une_liste_mal_formee() {
+        let mal_forme = Err(Arret::Echec(
+            "échec du système : arbre de l'automatisation mal formé".into(),
+        ));
+        let r = || e(None, FENETRE, "W");
+        let b = |parent| e(parent, 50_000, "B");
+        assert_eq!(verifier_la_forme(&[]), mal_forme);
+        // Une racine qui a un parent, le reste bien formé.
+        let racine_fille = ElementLu {
+            parent: Some(1),
+            ..r()
+        };
+        assert_eq!(verifier_la_forme(&[racine_fille, b(Some(0))]), mal_forme);
+        // Un élément sans parent à l'indice 2.
+        assert_eq!(verifier_la_forme(&[r(), b(Some(0)), b(None)]), mal_forme);
+        // Un parent qui suit son enfant.
+        assert_eq!(verifier_la_forme(&[r(), b(Some(2)), b(Some(0))]), mal_forme);
+        // Un cycle : 1 a pour parent 2, et 2 a pour parent 1.
+        assert_eq!(verifier_la_forme(&[r(), b(Some(2)), b(Some(1))]), mal_forme);
+        // Un élément qui est son propre parent.
+        assert_eq!(verifier_la_forme(&[r(), b(Some(1))]), mal_forme);
+        // Un parent hors de la liste.
+        assert_eq!(verifier_la_forme(&[r(), b(Some(5))]), mal_forme);
+        assert_eq!(verifier_la_forme(&arbre_d_essai()), Ok(()));
+        assert_eq!(verifier_la_forme(&[r()]), Ok(()));
+    }
+
+    // Sur une liste mal formée, `ancetres` rend une liste finie, sans paniquer : elle ne suit un
+    // parent que s'il précède l'élément courant. Sans cela, un parent hors de la liste ferait
+    // paniquer, et un cycle ferait grossir la liste jusqu'à épuiser la mémoire, ce que la reprise
+    // d'une panique n'arrête pas.
+    #[test]
+    fn ancetres_finis_sur_une_liste_mal_formee() {
+        let r = e(None, FENETRE, "W");
+        let hors_de_la_liste = [r.clone(), e(Some(5), 50_000, "A")];
+        assert_eq!(ancetres(&hors_de_la_liste, 1), Vec::<usize>::new());
+        // Un cycle : 1 a pour parent 2, et 2 a pour parent 1.
+        let cycle = [r, e(Some(2), 50_000, "A"), e(Some(1), 50_000, "B")];
+        assert_eq!(ancetres(&cycle, 1), Vec::<usize>::new());
+        assert_eq!(ancetres(&cycle, 2), vec![1]);
     }
 
     // Un ancêtre écarté ne compte pas pour `dans`, comme tout élément `hors`.

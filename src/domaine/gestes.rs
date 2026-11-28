@@ -46,6 +46,7 @@ use crate::domaine::sortie::Arret;
 use crate::domaine::sortie::Code;
 use crate::domaine::sortie::Issue;
 use crate::domaine::sortie::echapper;
+use crate::domaine::sortie::echec;
 use crate::domaine::sortie::formater;
 use crate::domaine::texte::LECTURE_MAX;
 use crate::domaine::texte::Unite;
@@ -769,11 +770,6 @@ fn journaliser(sous: &'static str, code: Code, s: &Suivi, b: &mut dyn Bureau) ->
         longueur: s.longueur,
     };
     b.ajouter_au_journal(&ligne(&appel)).is_ok()
-}
-
-/// L'échec du système : « échec du système : <quoi> ».
-fn echec(quoi: &str) -> Arret {
-    Arret::Echec(format!("échec du système : {quoi}"))
 }
 
 /// L'échec d'une lecture ou d'une action du système, son texte échappé : il tient en une ligne.
