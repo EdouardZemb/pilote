@@ -32,7 +32,7 @@ Ne jamais lancer `cargo test -- --ignored` ni `--include-ignored` sur le poste, 
 - L'ordre des gardes, c'est `src/domaine/gestes.rs`, et ses raisons, [ADR-0005](docs/decisions/0005-garde-fous-fenetre-retenue-et-premier-plan.md).
 - La sortie, les codes de sortie et les messages, c'est [ADR-0006](docs/decisions/0006-interface-sortie-codes-journal-et-bornes.md).
 - Les contrôles requis avant toute fusion, ce sont les six de la règle de protection de la branche principale : `socle / secrets`, `socle / confidentialite`, `texte-pr`, `verifier`, `windows` et `mutants`.
-- Le besoin de départ, c'est [le brief](docs/00-brief-initial.md), et les choix de départ, [le cadrage](docs/cadrage.md), figés depuis la phase 0.
+- Le besoin de départ, c'est [le brief](docs/00-brief-initial.md), et les choix de départ, [le cadrage](docs/cadrage.md).
 - Les décisions, ce sont [celles du projet](docs/decisions/) et [celles du modèle](docs/modele/decisions/).
 - La feuille de route, ce sont les issues (une milestone par étape) et [les pistes](docs/pistes.md).
 - Les constats, c'est [le registre](docs/registre.md).
