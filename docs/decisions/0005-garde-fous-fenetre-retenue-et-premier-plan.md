@@ -105,8 +105,11 @@ quelle que soit l'application.
 
 Aucune valeur ne passe par le cache de l'automatisation, ni par les motifs LegacyIAccessible et
 Text, qui la portent aussi : le contrôle statique refuse dans `src/` leurs noms et celui de la
-propriété de la valeur. Une tranche qui aurait besoin du motif Text ne lève la règle qu'avec un
-marquage relu juste avant (`CurrentIsPassword`), jugé dans le domaine et testé.
+propriété de la valeur, tout identifiant de propriété ou de motif bâti sur un nombre
+(`UIA_PROPERTY_ID(`, `UIA_PATTERN_ID(`), qui les nommerait sans leur nom, et l'accesseur
+`CachedValue` ; une valeur se lit en courant (`CurrentValue`). Une tranche qui aurait besoin du
+motif Text ne lève la règle qu'avec un marquage relu juste avant (`CurrentIsPassword`), jugé dans
+le domaine et testé.
 
 ### KeePassXC
 
@@ -382,15 +385,18 @@ Précisé par le plan de la tranche 2 du lot 1, qu'Edouard a accepté le 28/11/2
   modèle du fil principal, que la documentation de `SHGetPropertyStoreForWindow` ne dit pas, et
   c'est celle des essais, qui lisent l'AUMID dans un processus en STA, si bien que l'essai des
   Paramètres dit ce que lit `pilote`. Un fil par énumération, et non par fenêtre, garde le coût
-  d'une commande. Un fil qui ne naît pas, ou qui panique, rend `None` pour chaque fenêtre, sans
-  que la panique sorte du fil, et une lecture ratée `None` pour la sienne : le domaine refuse le
-  cadre sans AUMID dont aucun enfant d'un autre processus ne se lit (« La liste de refus »).
+  d'une commande. Un fil qui ne naît pas, qui panique, ou dont l'initialisation en STA échoue,
+  rend `None` pour chaque fenêtre, sans aucune lecture (sans STA, il lirait sous le MTA implicite
+  du processus) et sans que la panique sorte du fil, et une lecture ratée `None` pour la sienne :
+  le domaine refuse le cadre sans AUMID dont aucun enfant d'un autre processus ne se lit (« La
+  liste de refus »).
 - Limite : faute d'une autre application du Store sur le runner, aucun essai ne prouve qu'un AUMID
   d'une autre application se lit ; un AUMID perdu ne refuserait à tort que le cadre réduit d'une
   telle application.
 - Aucune valeur ne passe par le cache de l'automatisation, ni par les motifs LegacyIAccessible et
   Text, qui la portent aussi : le contrôle statique refuse leurs noms dans `src/`, avec celui de la
-  propriété de la valeur (« Les valeurs secrètes ne sortent jamais »).
+  propriété de la valeur, tout identifiant de propriété ou de motif bâti sur un nombre et
+  l'accesseur `CachedValue` (« Les valeurs secrètes ne sortent jamais »).
 
 ## Conséquences
 
@@ -413,12 +419,19 @@ Les règles et les tests qui les tiennent, nommés par leur chemin :
 - **Aucune valeur par le cache de l'automatisation, ni par les motifs LegacyIAccessible et Text**
   (« Les valeurs secrètes ne sortent jamais ») : `tests/statique.rs`,
   `refuse_le_jeton_et_les_chemins_de_la_valeur_dans_src`,
-  `chaque_mot_du_jeton_et_des_valeurs_a_sa_plantation` et `sources_respectent_les_regles`.
+  `chaque_mot_du_jeton_et_des_valeurs_a_sa_plantation`,
+  `chaque_detour_de_la_valeur_a_sa_plantation` et `sources_respectent_les_regles` : dans `src/`,
+  un nom de ces motifs ou de la propriété de la valeur, un identifiant bâti sur un nombre
+  (`UIA_PROPERTY_ID(`, `UIA_PATTERN_ID(`) ou l'accesseur `CachedValue` le fait échouer ; la
+  relecture de la couche Windows ferme ce que la recherche dans le texte laisse passer (un alias,
+  un `transmute`).
 - **`ToUnicodeEx` reçoit l'octet bas du balayage** (« Ce qui précise ou change le plan de la
   tranche ») : `tests/statique.rs`, `refuse_to_unicode_ex_hors_du_clavier`,
-  `refuse_to_unicode_ex_sans_l_octet_bas`, `to_unicode_ex_compte_sa_ligne_et_ses_trois_suivantes`
-  et `sources_respectent_les_regles` : un appel hors de `src/bureau/clavier.rs`, ou sans
-  `OCTET_BAS` sur sa ligne ni sur l'une des trois suivantes, le fait échouer.
+  `refuse_to_unicode_ex_sans_l_octet_bas`, `to_unicode_ex_compte_sa_ligne_et_ses_trois_suivantes`,
+  `octet_bas_compte_en_mot_entier_dans_le_code`, `refuse_les_autres_traductions_d_une_touche` et
+  `sources_respectent_les_regles` : un appel hors de `src/bureau/clavier.rs`, ou sans `OCTET_BAS`,
+  en mot entier, dans la partie code de sa ligne ou de l'une des trois suivantes, ou un appel de
+  `ToUnicode`, `ToAscii` ou `ToAsciiEx`, le fait échouer.
 
 ## Révision
 

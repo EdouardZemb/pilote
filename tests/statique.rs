@@ -19,17 +19,26 @@
 //! Aucune source de `src/`, `src/systeme.rs` compris, ne nomme le jeton restreint
 //! (`CreateRestrictedToken`, `CreateProcessAsUser`, `SetTokenInformation`), qui vit dans les
 //! essais, ni la propriété de la valeur, ni les motifs LegacyIAccessible et Text, qui la portent
-//! aussi : une valeur ne passe jamais par le cache de l'automatisation (ADR-0005, « Les valeurs
-//! secrètes ne sortent jamais »). Et `ToUnicodeEx(` ne s'écrit que dans `src/bureau/clavier.rs`,
-//! avec `OCTET_BAS` sur la ligne de l'appel ou sur l'une des trois suivantes : seul l'octet bas du
-//! balayage va à `ToUnicodeEx` (ADR-0005, « Ce qui précise ou change le plan de la tranche » ; LE-2
+//! aussi ; aucune n'y bâtit un identifiant de propriété ou de motif sur un nombre
+//! (`UIA_PROPERTY_ID(`, `UIA_PATTERN_ID(`), qui nommerait la valeur sans son nom, ni n'y appelle
+//! l'accesseur `CachedValue` : une valeur ne passe jamais par le cache de l'automatisation
+//! (ADR-0005, « Les valeurs secrètes ne sortent jamais »). Et `ToUnicodeEx(` ne s'écrit que dans
+//! `src/bureau/clavier.rs`, avec `OCTET_BAS` dans la partie code, avant un `//`, de la ligne de
+//! l'appel ou de l'une des trois suivantes ; aucune source, sauf celle-ci, n'appelle `ToUnicode(`,
+//! `ToAscii(` ni `ToAsciiEx(`, qui prennent le même balayage : seul l'octet bas du balayage va à
+//! la traduction d'une touche (ADR-0005, « Ce qui précise ou change le plan de la tranche » ; LE-2
 //! du registre).
 //!
 //! Le contrôle est une recherche dans le texte, pas une analyse de Rust. Il ferme les formes
 //! courantes : les chemins complets (`std::fs::read`), les imports groupés (`use std::{fs, io};`)
-//! et les préfixes nus qu'ils laissent employer (`fs::read`). Il ne ferme ni les alias (`use std
-//! as s;`, puis `s::fs`), ni les blancs dans un chemin (`std :: fs`) : la relecture du code du
-//! domaine les ferme.
+//! et les préfixes nus qu'ils laissent employer (`fs::read`). Il laisse ouvert : un alias (`use std
+//! as s;`, puis `s::fs` ; `use …::ToUnicodeEx as t;`) ou un pointeur de fonction ; des blancs dans
+//! un chemin (`std :: fs`) ou avant une parenthèse ; un identifiant bâti par accolades ou par
+//! `transmute` ; `OCTET_BAS` posé sur un autre argument que le balayage, ou dans une chaîne ; un
+//! test écrit `#[ test ]`, `#[cfg_attr(…, test)]` ou par un chemin complet. La relecture du code
+//! les ferme : celle du domaine, `src/domaine/`, pour ses mots ; celle de la couche Windows,
+//! `src/bureau/`, pour l'automatisation et le clavier ; celle de chaque fichier de tests pour les
+//! formes de `#[test]`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -128,11 +137,24 @@ const MOTS_DU_JETON_ET_DES_VALEURS: &[&str] = &[
     "IUIAutomationTextRange",
 ];
 
+/// Refusés dans `src/`, préfixes bornés à gauche : un identifiant de propriété ou de motif bâti
+/// sur un nombre (`UIA_PROPERTY_ID(30045)`, la propriété de la valeur ; `UIA_PATTERN_ID(10018)`,
+/// le motif LegacyIAccessible) contournerait les noms de `MOTS_DU_JETON_ET_DES_VALEURS`, et
+/// l'accesseur `CachedValue` lirait la valeur en cache, quand elle se lit en courant
+/// (`CurrentValue`). Le nom du type seul, sans parenthèse, reste permis dans une signature : les
+/// constantes nommées de `windows` en sont.
+const DETOURS_DE_LA_VALEUR: &[&str] = &["UIA_PROPERTY_ID(", "UIA_PATTERN_ID(", "CachedValue"];
+
+/// Refusés partout sauf ici, préfixes bornés à gauche : ces traductions d'une touche prennent le
+/// même balayage que `ToUnicodeEx`, sans la règle de l'octet bas ; seul `ToUnicodeEx` sert, dans
+/// `CLAVIER`. La parenthèse sépare `ToUnicode(` de `ToUnicodeEx(`, et un `use` n'appelle rien.
+const TRADUCTIONS_SANS_OCTET_BAS: &[&str] = &["ToUnicode(", "ToAscii(", "ToAsciiEx("];
+
 /// Le seul fichier qui appelle `ToUnicodeEx`.
 const CLAVIER: &str = "src/bureau/clavier.rs";
 
-/// La marque de l'octet bas du balayage, qu'un appel de `ToUnicodeEx` porte sur sa ligne ou sur
-/// l'une des `SUIVANTES`.
+/// La marque de l'octet bas du balayage, qu'un appel de `ToUnicodeEx` porte, en mot entier, dans
+/// la partie code de sa ligne ou de l'une des `SUIVANTES`.
 const OCTET_BAS: &str = "OCTET_BAS";
 
 /// L'appel de `ToUnicodeEx`, parenthèse comprise : un `use` ne l'appelle pas.
@@ -163,6 +185,9 @@ const LIB: &str = "src/lib.rs";
 /// Le poste réel, que seuls la couche Windows, `LIB` et ce fichier nomment.
 const BUREAU_REEL: &str = "BureauWindows";
 
+/// L'attribut d'un test.
+const ATTRIBUT_TEST: &str = "#[test]";
+
 /// L'attribut que porte, sur la ligne d'avant, chaque `#[test]` d'un fichier d'essai.
 const IGNORE_DES_ESSAIS: &str = "#[ignore = \"il pilote le bureau : la CI le lance\"]";
 
@@ -175,9 +200,10 @@ const RACINES: &[&str] = &["src", "tests", "essai/appli/src"];
 
 /// Les mots que `chemin` ne porte jamais, chacun avec sa sorte (vrai pour un mot entier, faux pour
 /// un préfixe) : dans `src/`, hors de `SYSTEME`, tous les mots entiers et les préfixes sauf
-/// `SetValue` ; dans tout `src/`, `SYSTEME` compris, les mots du jeton et des valeurs ; dans le
-/// domaine, de plus `MOTS_DU_DOMAINE` ; partout sauf ici, `SetValue` ; dans `tests/`, hors de
-/// `COMMUN` et d'ici, les mots de lancement ; hors de `BUREAU`, de `LIB` et d'ici, le poste réel.
+/// `SetValue` ; dans tout `src/`, `SYSTEME` compris, les mots du jeton et des valeurs, puis les
+/// détours de la valeur ; dans le domaine, de plus `MOTS_DU_DOMAINE` ; partout sauf ici,
+/// `SetValue` et les traductions sans l'octet bas ; dans `tests/`, hors de `COMMUN` et d'ici, les
+/// mots de lancement ; hors de `BUREAU`, de `LIB` et d'ici, le poste réel.
 fn mots_refuses(chemin: &str) -> Vec<(&'static str, bool)> {
     let mut mots = Vec::new();
     if chemin.starts_with("src/") && chemin != SYSTEME {
@@ -191,12 +217,14 @@ fn mots_refuses(chemin: &str) -> Vec<(&'static str, bool)> {
     }
     if chemin.starts_with("src/") {
         mots.extend(MOTS_DU_JETON_ET_DES_VALEURS.iter().map(|mot| (*mot, false)));
+        mots.extend(DETOURS_DE_LA_VALEUR.iter().map(|mot| (*mot, false)));
     }
     if chemin.starts_with(DOMAINE) {
         mots.extend(MOTS_DU_DOMAINE.iter().map(|mot| (*mot, false)));
     }
     if chemin != STATIQUE {
         mots.push((SET_VALUE, true));
+        mots.extend(TRADUCTIONS_SANS_OCTET_BAS.iter().map(|mot| (*mot, false)));
     }
     if chemin.starts_with("tests/") && chemin != COMMUN && chemin != STATIQUE {
         mots.extend(MOTS_DE_LANCEMENT.iter().map(|mot| (*mot, false)));
@@ -264,14 +292,22 @@ fn fautes_du_test(chemin: &str, numero: usize, precedente: Option<&str>) -> Vec<
 /// ligne d'avant un `#[test]` en tête de ligne, et un test écrit après un autre attribut, sur la
 /// même ligne, leur échapperait.
 fn fautes_de_la_ligne_de_test(chemin: &str, numero: usize, ligne: &str) -> Option<String> {
-    (chemin != STATIQUE && ligne.contains("#[test]") && !ligne.trim_start().starts_with("#[test]"))
+    (chemin != STATIQUE && ligne.contains(ATTRIBUT_TEST) && !ouvre_un_test(ligne))
         .then(|| format!("{chemin}:{numero} : #[test] hors de la tête de ligne"))
+}
+
+/// Vrai si `ligne` ouvre un test : son début, blancs ôtés, est `ATTRIBUT_TEST`. `controler` juge
+/// alors les attributs de la ligne d'avant, et `fautes_de_la_ligne_de_test` refuse tout autre
+/// `#[test]` : les deux règles se complètent sur ce seul critère.
+fn ouvre_un_test(ligne: &str) -> bool {
+    ligne.trim_start().starts_with(ATTRIBUT_TEST)
 }
 
 /// Les fautes des appels de `ToUnicodeEx` des lignes `lignes` de `chemin`, hors de ce fichier :
 /// chaque ligne qui porte `APPEL_TO_UNICODE_EX` est une faute hors de `CLAVIER` ; dans `CLAVIER`,
-/// si ni elle ni l'une de ses `SUIVANTES` ne porte `OCTET_BAS`. Une ligne de commentaire ne compte
-/// ni pour l'appel ni pour l'octet bas.
+/// si ni elle ni l'une de ses `SUIVANTES` ne porte `OCTET_BAS`, en mot entier, dans sa partie code.
+/// Une ligne de commentaire ne compte ni pour l'appel ni pour l'octet bas, et un commentaire de fin
+/// de ligne pas pour l'octet bas.
 fn fautes_de_to_unicode_ex(chemin: &str, lignes: &[&str]) -> Vec<String> {
     if chemin == STATIQUE {
         return Vec::new();
@@ -289,7 +325,7 @@ fn fautes_de_to_unicode_ex(chemin: &str, lignes: &[&str]) -> Vec<String> {
         } else if !lignes[indice..]
             .iter()
             .take(1 + SUIVANTES)
-            .any(|l| !est_un_commentaire(l) && porte(l, OCTET_BAS, true))
+            .any(|l| porte(partie_code(l), OCTET_BAS, true))
         {
             fautes.push(format!(
                 "{chemin}:{} : ToUnicodeEx sans l'octet bas du balayage",
@@ -304,6 +340,13 @@ fn fautes_de_to_unicode_ex(chemin: &str, lignes: &[&str]) -> Vec<String> {
 /// `//`.
 fn est_un_commentaire(ligne: &str) -> bool {
     ligne.trim_start().starts_with("//")
+}
+
+/// La partie code de `ligne` : ce qui précède son premier `//`, toute la ligne s'il n'y en a pas.
+/// Une ligne de commentaire n'en a donc aucune ; un `//` dans une chaîne coupe aussi la ligne, ce
+/// qui ne peut que refuser plus.
+fn partie_code(ligne: &str) -> &str {
+    ligne.find("//").map_or(ligne, |fin| &ligne[..fin])
 }
 
 /// Vrai si `c` colle à un nom : une lettre, un chiffre ou `_`.
@@ -327,7 +370,7 @@ fn porte(ligne: &str, mot: &str, entier: bool) -> bool {
 /// chemins en `/`. Une ligne dont le début, blancs ôtés, est `//` (commentaire, documentation) ne
 /// compte pas, mais garde son numéro. Chaque faute d'un mot nomme le fichier, la ligne et le mot,
 /// une fois par ligne et par mot, dans l'ordre de `mots_refuses` : « <chemin>:<ligne> contient
-/// « <mot> » ». Une ligne dont le début, blancs ôtés, est `#[test]` porte ensuite les fautes de
+/// « <mot> » ». Une ligne qui ouvre un test (`ouvre_un_test`) porte ensuite les fautes de
 /// `fautes_du_test`, jugées sur la ligne d'avant, telle quelle ; une ligne qui porte `#[test]`
 /// ailleurs, celle de `fautes_de_la_ligne_de_test`. Après les lignes d'un fichier viennent les
 /// fautes de ses appels de `ToUnicodeEx`, celles de `fautes_de_to_unicode_ex`.
@@ -345,7 +388,7 @@ fn controler(sources: &[(String, String)]) -> Vec<String> {
                     fautes.push(format!("{chemin}:{} contient « {mot} »", indice + 1));
                 }
             }
-            if ligne.trim_start().starts_with("#[test]") {
+            if ouvre_un_test(ligne) {
                 let precedente = indice.checked_sub(1).map(|i| lignes[i]);
                 fautes.extend(fautes_du_test(chemin, indice + 1, precedente));
             }
@@ -808,6 +851,51 @@ fn chaque_mot_du_jeton_et_des_valeurs_a_sa_plantation() {
     );
 }
 
+/// Un identifiant de propriété ou de motif bâti sur un nombre, et l'accesseur de la valeur en
+/// cache, sont refusés dans tout `src/`, `src/systeme.rs` compris : `UIA_PROPERTY_ID(30045)` est
+/// la propriété de la valeur, et `UIA_PATTERN_ID(10018)` le motif LegacyIAccessible, sans aucun
+/// nom de `MOTS_DU_JETON_ET_DES_VALEURS`. Le nom du type seul, dans une signature, et la lecture en
+/// courant passent ; hors de `src/`, chaque mot passe.
+#[test]
+fn chaque_detour_de_la_valeur_a_sa_plantation() {
+    refuse(
+        "src/bureau/uia.rs",
+        "requete.AddProperty(UIA_PROPERTY_ID(30045))?;",
+        "src/bureau/uia.rs:1 contient « UIA_PROPERTY_ID( »",
+    );
+    refuse(
+        "src/bureau/uia.rs",
+        "let m = e.GetCachedPattern(UIA_PATTERN_ID(10018))?;",
+        "src/bureau/uia.rs:1 contient « UIA_PATTERN_ID( »",
+    );
+    refuse(
+        "src/bureau/uia.rs",
+        "let v = unsafe { motif.CachedValue() }?;",
+        "src/bureau/uia.rs:1 contient « CachedValue »",
+    );
+    refuse(
+        "src/systeme.rs",
+        "let id = windows::Win32::UI::Accessibility::UIA_PROPERTY_ID(30093);",
+        "src/systeme.rs:1 contient « UIA_PROPERTY_ID( »",
+    );
+    admet(
+        "src/bureau/uia.rs",
+        "fn lire(e: &E, id: UIA_PROPERTY_ID, m: UIA_PATTERN_ID) {}",
+    );
+    admet(
+        "src/bureau/uia.rs",
+        "let v = unsafe { motif.CurrentValue() }?;",
+    );
+    for texte in [
+        "UIA_PROPERTY_ID(30045)",
+        "UIA_PATTERN_ID(10018)",
+        "motif.CachedValue()",
+    ] {
+        admet("tests/commun/mod.rs", texte);
+        admet("essai/appli/src/main.rs", texte);
+    }
+}
+
 #[test]
 fn refuse_un_test_hors_de_la_tete_de_ligne() {
     refuse(
@@ -824,13 +912,21 @@ fn refuse_un_test_hors_de_la_tete_de_ligne() {
     admet("tests/statique.rs", "let t = \"#[test]\";");
 }
 
+/// La règle vaut pour tout fichier lu hors de `CLAVIER` et d'ici : la couche Windows, le module
+/// commun des essais et l'application d'essai.
 #[test]
 fn refuse_to_unicode_ex_hors_du_clavier() {
-    refuse(
+    for chemin in [
         "src/bureau/fenetres.rs",
-        "let n = unsafe { ToUnicodeEx(vk, b & OCTET_BAS, &e, &mut t, 0, None) };",
-        "src/bureau/fenetres.rs:1 : ToUnicodeEx hors de src/bureau/clavier.rs",
-    );
+        "tests/commun/mod.rs",
+        "essai/appli/src/main.rs",
+    ] {
+        refuse(
+            chemin,
+            "let n = unsafe { ToUnicodeEx(vk, b & OCTET_BAS, &e, &mut t, 0, None) };",
+            &format!("{chemin}:1 : ToUnicodeEx hors de src/bureau/clavier.rs"),
+        );
+    }
 }
 
 #[test]
@@ -875,5 +971,55 @@ fn to_unicode_ex_compte_sa_ligne_et_ses_trois_suivantes() {
     admet(
         "src/domaine/texte.rs",
         "/// `ToUnicodeEx(vk, balayage)` produit…",
+    );
+}
+
+/// `OCTET_BAS` ne compte que dans la partie code d'une ligne, avant un `//`, et en mot entier : ni
+/// un commentaire de fin de ligne, ni une constante dont le nom le prolonge ne le posent.
+#[test]
+fn octet_bas_compte_en_mot_entier_dans_le_code() {
+    refuse(
+        "src/bureau/clavier.rs",
+        "ToUnicodeEx(\n    u32::from(vk),\n    balayage, // OCTET_BAS\n    &clavier,\n)",
+        "src/bureau/clavier.rs:1 : ToUnicodeEx sans l'octet bas du balayage",
+    );
+    refuse(
+        "src/bureau/clavier.rs",
+        "ToUnicodeEx(\n    u32::from(vk),\n    balayage & OCTET_BAS_ETENDU,\n    &clavier,\n)",
+        "src/bureau/clavier.rs:1 : ToUnicodeEx sans l'octet bas du balayage",
+    );
+    admet(
+        "src/bureau/clavier.rs",
+        "ToUnicodeEx(\n    u32::from(vk),\n    balayage & OCTET_BAS, // l'octet bas\n)",
+    );
+}
+
+/// `ToUnicode`, `ToAscii` et `ToAsciiEx` prennent le même balayage que `ToUnicodeEx`, sans la
+/// règle de l'octet bas : leur appel est refusé dans tout fichier lu, `CLAVIER` compris, sauf ici,
+/// qui les cite. Un `use` n'appelle rien.
+#[test]
+fn refuse_les_autres_traductions_d_une_touche() {
+    refuse(
+        "src/bureau/clavier.rs",
+        "let n = unsafe { ToUnicode(vk, b & OCTET_BAS, &e, &mut t, 0) };",
+        "src/bureau/clavier.rs:1 contient « ToUnicode( »",
+    );
+    refuse(
+        "tests/commun/mod.rs",
+        "let n = unsafe { ToAscii(vk, b, &e, &mut t, 0) };",
+        "tests/commun/mod.rs:1 contient « ToAscii( »",
+    );
+    refuse(
+        "essai/appli/src/main.rs",
+        "let n = unsafe { ToAsciiEx(vk, b, &e, &mut t, 0, hkl) };",
+        "essai/appli/src/main.rs:1 contient « ToAsciiEx( »",
+    );
+    admet(
+        "src/bureau/clavier.rs",
+        "use windows::Win32::UI::Input::KeyboardAndMouse::ToAscii;",
+    );
+    admet(
+        "tests/statique.rs",
+        "let t = \"ToUnicode(vk) ToAscii(vk) ToAsciiEx(vk)\";",
     );
 }

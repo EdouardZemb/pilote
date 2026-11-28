@@ -73,7 +73,9 @@ pub fn fenetres() -> Result<Vec<FenetreLue>, ErreurSysteme> {
 /// Paramètres dit ce que lit `pilote`. Un fil par énumération, et non par fenêtre, garde le coût
 /// d'une commande. Le fil reçoit les identifiants des fenêtres, des entiers, puisqu'un `HWND`
 /// n'est pas `Send`. Un AUMID illisible vaut `None`, que le domaine juge ; un fil qui ne naît
-/// pas, ou qui panique, rend `None` pour chaque fenêtre, sans que la panique traverse `join`.
+/// pas, qui panique, ou dont l'initialisation en STA échoue, rend `None` pour chaque fenêtre,
+/// sans aucune lecture et sans que la panique traverse `join` : sans STA, le fil appartiendrait au
+/// MTA implicite du processus, la lecture que la règle écarte.
 fn aumids(hwnds: &[HWND]) -> Vec<Option<String>> {
     let ids: Vec<IdFenetre> = hwnds.iter().copied().map(id_de).collect();
     let nombre = ids.len();
@@ -83,12 +85,13 @@ fn aumids(hwnds: &[HWND]) -> Vec<Option<String>> {
             // SAFETY: aucun argument réservé ; un appel sur ce fil neuf, équilibré plus bas par
             // `CoUninitialize` s'il a réussi, S_FALSE compris.
             let com = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-            let lus: Vec<Option<String>> = ids.into_iter().map(hwnd_de).map(aumid).collect();
-            if com.is_ok() {
-                // SAFETY: équilibre l'initialisation réussie de ce fil, après la dernière lecture,
-                // dont chaque interface est déjà relâchée.
-                unsafe { CoUninitialize() };
+            if com.is_err() {
+                return vec![None; nombre];
             }
+            let lus: Vec<Option<String>> = ids.into_iter().map(hwnd_de).map(aumid).collect();
+            // SAFETY: équilibre l'initialisation réussie de ce fil, après la dernière lecture,
+            // dont chaque interface est déjà relâchée.
+            unsafe { CoUninitialize() };
             lus
         })
         .ok()
@@ -196,7 +199,7 @@ fn reduite(h: HWND) -> bool {
 }
 
 /// L'AUMID de la fenêtre `h` (`PKEY_AppUserModel_ID`) ; `None` s'il est vide ou ne se lit pas.
-/// Il se lit sur le fil d'`aumids`, en STA.
+/// Il ne se lit que sur le fil d'`aumids`, une fois son initialisation en STA réussie.
 fn aumid(h: HWND) -> Option<String> {
     // SAFETY: le magasin se lit puis se relâche à sa sortie de portée ; la valeur lue est vidée
     // par `PropVariantClear`, et le texte alloué libéré par `CoTaskMemFree`, sur tous les chemins.
