@@ -4,7 +4,7 @@
 //! (`CLASSE_CADRE`) l'est quand son AUMID est celui des Paramètres, ou quand il n'en a pas et
 //! qu'aucun enfant d'un autre processus ne se lit : réduit, le cadre des Paramètres ne garde que ses
 //! propres filles. Rien ne configure cette liste. KeePassXC a sa propre règle, que `gestes` juge
-//! pour `touche` et `taper` (décision 3).
+//! pour `touche` et `taper` (ADR-0005, « KeePassXC »).
 
 use crate::domaine::fenetre::FenetreLue;
 use crate::domaine::processus::Processus;

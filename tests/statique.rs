@@ -5,14 +5,25 @@
 //! lit sur le disque chaque `.rs` de `src/`, `tests/` et `essai/appli/src/`. Les règles « dans
 //! `src/` » visent les chemins qui commencent par `src/`, jamais `essai/appli/src/` ni `tests/`.
 //!
-//! Les essais de bout en bout ne tournent jamais sur le poste (décision 13 du plan maître) : chaque
-//! `#[test]` des fichiers d'essai, `tests/essais_*.rs`, porte sur la ligne d'avant l'attribut
-//! `IGNORE_DES_ESSAIS` ; chaque autre `#[test]` lu, hors du domaine et de ce fichier, un
+//! Les essais de bout en bout ne tournent jamais sur le poste (`CLAUDE.md` : la CI seule les
+//! lance) : chaque `#[test]` des fichiers d'essai, `tests/essais_*.rs`, porte sur la ligne d'avant
+//! l'attribut `IGNORE_DES_ESSAIS` ; chaque autre `#[test]` lu, hors du domaine et de ce fichier, un
 //! `#[ignore = …]`, l'application d'essai comprise : seuls les tests du domaine et du contrôle
-//! tournent par un simple `cargo test`, et un test qui toucherait Windows ne part qu'en CI ; aucun
-//! fichier de `tests/`, hors du module commun des essais et de ce fichier, ne nomme un mot de
-//! lancement ; la couche Windows, `src/bureau/`, n'a aucun test ; et seuls elle, `src/lib.rs` et
-//! ce fichier nomment le poste réel, `BureauWindows`.
+//! tournent par un simple `cargo test`, et un test qui toucherait Windows ne part qu'en CI ; un
+//! `#[test]` qui n'est pas au début de sa ligne, blancs ôtés, est une faute hors de ce fichier,
+//! puisque l'attribut exigé se lit sur la ligne d'avant ; aucun fichier de `tests/`, hors du module
+//! commun des essais et de ce fichier, ne nomme un mot de lancement, de Rust (`Command::new`) comme
+//! de Win32 (`CreateProcess`, `ShellExecute`) ; la couche Windows, `src/bureau/`, n'a aucun test ;
+//! et seuls elle, `src/lib.rs` et ce fichier nomment le poste réel, `BureauWindows`.
+//!
+//! Aucune source de `src/`, `src/systeme.rs` compris, ne nomme le jeton restreint
+//! (`CreateRestrictedToken`, `CreateProcessAsUser`, `SetTokenInformation`), qui vit dans les
+//! essais, ni la propriété de la valeur, ni les motifs LegacyIAccessible et Text, qui la portent
+//! aussi : une valeur ne passe jamais par le cache de l'automatisation (ADR-0005, « Les valeurs
+//! secrètes ne sortent jamais »). Et `ToUnicodeEx(` ne s'écrit que dans `src/bureau/clavier.rs`,
+//! avec `OCTET_BAS` sur la ligne de l'appel ou sur l'une des trois suivantes : seul l'octet bas du
+//! balayage va à `ToUnicodeEx` (ADR-0005, « Ce qui précise ou change le plan de la tranche » ; LE-2
+//! du registre).
 //!
 //! Le contrôle est une recherche dans le texte, pas une analyse de Rust. Il ferme les formes
 //! courantes : les chemins complets (`std::fs::read`), les imports groupés (`use std::{fs, io};`)
@@ -81,10 +92,55 @@ const MOTS_DU_DOMAINE: &[&str] = &[
     "env::",
 ];
 
-/// Les mots de lancement : aucun fichier de `tests/` ne les nomme, sauf le module commun des essais
-/// et ce fichier. Des préfixes bornés à gauche seulement : `CARGO_BIN_EXE` voit
-/// `CARGO_BIN_EXE_pilote`.
-const MOTS_DE_LANCEMENT: &[&str] = &["CARGO_BIN_EXE", "Command::new", "std::process", "spawn"];
+/// Les mots de lancement, de Rust comme de Win32 : aucun fichier de `tests/` ne les nomme, sauf le
+/// module commun des essais et ce fichier. Des préfixes bornés à gauche seulement : `CARGO_BIN_EXE`
+/// voit `CARGO_BIN_EXE_pilote`, `CreateProcess` voit `CreateProcessW` et `CreateProcessAsUserW`,
+/// `ShellExecute` voit `ShellExecuteExW`.
+const MOTS_DE_LANCEMENT: &[&str] = &[
+    "CARGO_BIN_EXE",
+    "Command::new",
+    "std::process",
+    "spawn",
+    "CreateProcess",
+    "ShellExecute",
+];
+
+/// Refusés dans `src/`, préfixes bornés à gauche : le jeton restreint vit dans les essais
+/// (ADR-0005, « Le niveau d'intégrité se juge par comparaison ») ; la valeur ne passe jamais par le
+/// cache, ni par les motifs LegacyIAccessible et Text, qui la portent aussi. Une tranche qui aurait
+/// besoin du motif Text ne lève la règle qu'avec un marquage relu juste avant (`CurrentIsPassword`),
+/// jugé dans le domaine et testé.
+const MOTS_DU_JETON_ET_DES_VALEURS: &[&str] = &[
+    "CreateRestrictedToken",
+    "CreateProcessAsUser",
+    "SetTokenInformation",
+    "UIA_ValueValuePropertyId",
+    "UIA_LegacyIAccessibleValuePropertyId",
+    "UIA_LegacyIAccessiblePatternId",
+    "IUIAutomationLegacyIAccessiblePattern",
+    "UIA_TextPatternId",
+    "UIA_TextPattern2Id",
+    "UIA_TextEditPatternId",
+    "UIA_TextChildPatternId",
+    "IUIAutomationTextPattern",
+    "IUIAutomationTextEditPattern",
+    "IUIAutomationTextChildPattern",
+    "IUIAutomationTextRange",
+];
+
+/// Le seul fichier qui appelle `ToUnicodeEx`.
+const CLAVIER: &str = "src/bureau/clavier.rs";
+
+/// La marque de l'octet bas du balayage, qu'un appel de `ToUnicodeEx` porte sur sa ligne ou sur
+/// l'une des `SUIVANTES`.
+const OCTET_BAS: &str = "OCTET_BAS";
+
+/// L'appel de `ToUnicodeEx`, parenthèse comprise : un `use` ne l'appelle pas.
+const APPEL_TO_UNICODE_EX: &str = "ToUnicodeEx(";
+
+/// Les lignes qui suivent un appel de `ToUnicodeEx` et peuvent porter `OCTET_BAS`, celle de l'appel
+/// en plus : rustfmt range un appel long un argument par ligne, et le balayage en est le deuxième.
+const SUIVANTES: usize = 3;
 
 /// Le seul fichier de `src/` qui lit l'horloge et l'environnement, et résout les chemins.
 const SYSTEME: &str = "src/systeme.rs";
@@ -119,9 +175,9 @@ const RACINES: &[&str] = &["src", "tests", "essai/appli/src"];
 
 /// Les mots que `chemin` ne porte jamais, chacun avec sa sorte (vrai pour un mot entier, faux pour
 /// un préfixe) : dans `src/`, hors de `SYSTEME`, tous les mots entiers et les préfixes sauf
-/// `SetValue` ; dans le domaine, de plus `MOTS_DU_DOMAINE` ; partout sauf ici, `SetValue` ; dans
-/// `tests/`, hors de `COMMUN` et d'ici, les mots de lancement ; hors de `BUREAU`, de `LIB` et d'ici,
-/// le poste réel.
+/// `SetValue` ; dans tout `src/`, `SYSTEME` compris, les mots du jeton et des valeurs ; dans le
+/// domaine, de plus `MOTS_DU_DOMAINE` ; partout sauf ici, `SetValue` ; dans `tests/`, hors de
+/// `COMMUN` et d'ici, les mots de lancement ; hors de `BUREAU`, de `LIB` et d'ici, le poste réel.
 fn mots_refuses(chemin: &str) -> Vec<(&'static str, bool)> {
     let mut mots = Vec::new();
     if chemin.starts_with("src/") && chemin != SYSTEME {
@@ -132,6 +188,9 @@ fn mots_refuses(chemin: &str) -> Vec<(&'static str, bool)> {
                 .map(|mot| (*mot, true)),
         );
         mots.extend(PREFIXES.iter().map(|mot| (*mot, false)));
+    }
+    if chemin.starts_with("src/") {
+        mots.extend(MOTS_DU_JETON_ET_DES_VALEURS.iter().map(|mot| (*mot, false)));
     }
     if chemin.starts_with(DOMAINE) {
         mots.extend(MOTS_DU_DOMAINE.iter().map(|mot| (*mot, false)));
@@ -200,6 +259,53 @@ fn fautes_du_test(chemin: &str, numero: usize, precedente: Option<&str>) -> Vec<
     fautes
 }
 
+/// La faute de la ligne `numero` de `chemin` qui porte `#[test]` ailleurs qu'à son début, blancs
+/// ôtés, hors de ce fichier, qui le cite dans ses chaînes : les attributs exigés se jugent sur la
+/// ligne d'avant un `#[test]` en tête de ligne, et un test écrit après un autre attribut, sur la
+/// même ligne, leur échapperait.
+fn fautes_de_la_ligne_de_test(chemin: &str, numero: usize, ligne: &str) -> Option<String> {
+    (chemin != STATIQUE && ligne.contains("#[test]") && !ligne.trim_start().starts_with("#[test]"))
+        .then(|| format!("{chemin}:{numero} : #[test] hors de la tête de ligne"))
+}
+
+/// Les fautes des appels de `ToUnicodeEx` des lignes `lignes` de `chemin`, hors de ce fichier :
+/// chaque ligne qui porte `APPEL_TO_UNICODE_EX` est une faute hors de `CLAVIER` ; dans `CLAVIER`,
+/// si ni elle ni l'une de ses `SUIVANTES` ne porte `OCTET_BAS`. Une ligne de commentaire ne compte
+/// ni pour l'appel ni pour l'octet bas.
+fn fautes_de_to_unicode_ex(chemin: &str, lignes: &[&str]) -> Vec<String> {
+    if chemin == STATIQUE {
+        return Vec::new();
+    }
+    let mut fautes = Vec::new();
+    for (indice, ligne) in lignes.iter().enumerate() {
+        if est_un_commentaire(ligne) || !porte(ligne, APPEL_TO_UNICODE_EX, false) {
+            continue;
+        }
+        if chemin != CLAVIER {
+            fautes.push(format!(
+                "{chemin}:{} : ToUnicodeEx hors de {CLAVIER}",
+                indice + 1
+            ));
+        } else if !lignes[indice..]
+            .iter()
+            .take(1 + SUIVANTES)
+            .any(|l| !est_un_commentaire(l) && porte(l, OCTET_BAS, true))
+        {
+            fautes.push(format!(
+                "{chemin}:{} : ToUnicodeEx sans l'octet bas du balayage",
+                indice + 1
+            ));
+        }
+    }
+    fautes
+}
+
+/// Vrai si `ligne` est une ligne de commentaire ou de documentation : son début, blancs ôtés, est
+/// `//`.
+fn est_un_commentaire(ligne: &str) -> bool {
+    ligne.trim_start().starts_with("//")
+}
+
 /// Vrai si `c` colle à un nom : une lettre, un chiffre ou `_`.
 fn colle(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
@@ -222,14 +328,16 @@ fn porte(ligne: &str, mot: &str, entier: bool) -> bool {
 /// compte pas, mais garde son numéro. Chaque faute d'un mot nomme le fichier, la ligne et le mot,
 /// une fois par ligne et par mot, dans l'ordre de `mots_refuses` : « <chemin>:<ligne> contient
 /// « <mot> » ». Une ligne dont le début, blancs ôtés, est `#[test]` porte ensuite les fautes de
-/// `fautes_du_test`, jugées sur la ligne d'avant, telle quelle.
+/// `fautes_du_test`, jugées sur la ligne d'avant, telle quelle ; une ligne qui porte `#[test]`
+/// ailleurs, celle de `fautes_de_la_ligne_de_test`. Après les lignes d'un fichier viennent les
+/// fautes de ses appels de `ToUnicodeEx`, celles de `fautes_de_to_unicode_ex`.
 fn controler(sources: &[(String, String)]) -> Vec<String> {
     let mut fautes = Vec::new();
     for (chemin, texte) in sources {
         let mots = mots_refuses(chemin);
         let lignes: Vec<&str> = texte.lines().collect();
         for (indice, ligne) in lignes.iter().enumerate() {
-            if ligne.trim_start().starts_with("//") {
+            if est_un_commentaire(ligne) {
                 continue;
             }
             for (mot, entier) in &mots {
@@ -241,7 +349,9 @@ fn controler(sources: &[(String, String)]) -> Vec<String> {
                 let precedente = indice.checked_sub(1).map(|i| lignes[i]);
                 fautes.extend(fautes_du_test(chemin, indice + 1, precedente));
             }
+            fautes.extend(fautes_de_la_ligne_de_test(chemin, indice + 1, ligne));
         }
+        fautes.extend(fautes_de_to_unicode_ex(chemin, &lignes));
     }
     fautes
 }
@@ -636,5 +746,134 @@ fn refuse_le_bureau_reel_hors_de_sa_place() {
         "src/domaine/gestes.rs",
         "BureauWindows::new()",
         "src/domaine/gestes.rs:1 contient « BureauWindows »",
+    );
+}
+
+#[test]
+fn refuse_un_lancement_win32_dans_un_essai() {
+    refuse(
+        "tests/essais_x.rs",
+        "let _ = CreateProcessW(None, …);",
+        "tests/essais_x.rs:1 contient « CreateProcess »",
+    );
+    refuse(
+        "tests/essais_x.rs",
+        "ShellExecuteExW(&mut info);",
+        "tests/essais_x.rs:1 contient « ShellExecute »",
+    );
+    admet("tests/commun/mod.rs", "CreateProcessAsUserW(…);");
+}
+
+#[test]
+fn refuse_le_jeton_et_les_chemins_de_la_valeur_dans_src() {
+    for mot in MOTS_DU_JETON_ET_DES_VALEURS {
+        refuse(
+            "src/bureau/x.rs",
+            &format!("let _ = {mot}W(…);"),
+            &format!("src/bureau/x.rs:1 contient « {mot} »"),
+        );
+    }
+    admet(
+        "tests/commun/mod.rs",
+        "CreateRestrictedToken(…); SetTokenInformation(…);",
+    );
+}
+
+/// Chacun des quinze mots a sa plantation, et deux variantes se voient par leur préfixe. La règle
+/// vaut pour tout `src/`, `src/systeme.rs` compris, qui échappe aux mots de l'horloge et de
+/// l'environnement.
+#[test]
+fn chaque_mot_du_jeton_et_des_valeurs_a_sa_plantation() {
+    for mot in MOTS_DU_JETON_ET_DES_VALEURS {
+        refuse(
+            "src/bureau/mod.rs",
+            &format!("let x = {mot};"),
+            &format!("src/bureau/mod.rs:1 contient « {mot} »"),
+        );
+    }
+    for (variante, mot) in [
+        ("IUIAutomationTextPattern2", "IUIAutomationTextPattern"),
+        ("IUIAutomationTextRangeArray", "IUIAutomationTextRange"),
+    ] {
+        refuse(
+            "src/bureau/mod.rs",
+            &format!("let x = {variante};"),
+            &format!("src/bureau/mod.rs:1 contient « {mot} »"),
+        );
+    }
+    refuse(
+        "src/systeme.rs",
+        "let x = SetTokenInformation;",
+        "src/systeme.rs:1 contient « SetTokenInformation »",
+    );
+}
+
+#[test]
+fn refuse_un_test_hors_de_la_tete_de_ligne() {
+    refuse(
+        "src/domaine/x.rs",
+        "#[cfg(test)] #[test]\nfn a() {}",
+        "src/domaine/x.rs:1 : #[test] hors de la tête de ligne",
+    );
+    refuse(
+        "tests/essais_x.rs",
+        "#[ignore = \"il pilote le bureau : la CI le lance\"] #[test]\nfn a() {}",
+        "tests/essais_x.rs:1 : #[test] hors de la tête de ligne",
+    );
+    admet("src/domaine/x.rs", "// un #[test] cité dans un commentaire");
+    admet("tests/statique.rs", "let t = \"#[test]\";");
+}
+
+#[test]
+fn refuse_to_unicode_ex_hors_du_clavier() {
+    refuse(
+        "src/bureau/fenetres.rs",
+        "let n = unsafe { ToUnicodeEx(vk, b & OCTET_BAS, &e, &mut t, 0, None) };",
+        "src/bureau/fenetres.rs:1 : ToUnicodeEx hors de src/bureau/clavier.rs",
+    );
+}
+
+#[test]
+fn refuse_to_unicode_ex_sans_l_octet_bas() {
+    refuse(
+        "src/bureau/clavier.rs",
+        "ToUnicodeEx(\n    u32::from(vk),\n    balayage,\n    &clavier,\n)",
+        "src/bureau/clavier.rs:1 : ToUnicodeEx sans l'octet bas du balayage",
+    );
+    admet(
+        "src/bureau/clavier.rs",
+        "ToUnicodeEx(\n    u32::from(vk),\n    balayage & OCTET_BAS,\n)",
+    );
+    admet(
+        "src/bureau/clavier.rs",
+        "use windows::Win32::UI::Input::KeyboardAndMouse::ToUnicodeEx;",
+    );
+}
+
+/// L'octet bas se cherche sur la ligne de l'appel ou sur l'une des trois suivantes, jamais plus
+/// loin ; une ligne de commentaire ne compte ni pour l'appel ni pour l'octet bas.
+#[test]
+fn to_unicode_ex_compte_sa_ligne_et_ses_trois_suivantes() {
+    admet(
+        "src/bureau/clavier.rs",
+        "ToUnicodeEx(vk, b & OCTET_BAS, &e)",
+    );
+    admet(
+        "src/bureau/clavier.rs",
+        "ToUnicodeEx(\n    a,\n    b,\n    c & OCTET_BAS,\n)",
+    );
+    refuse(
+        "src/bureau/clavier.rs",
+        "ToUnicodeEx(\n    a,\n    b,\n    c,\n    d & OCTET_BAS,\n)",
+        "src/bureau/clavier.rs:1 : ToUnicodeEx sans l'octet bas du balayage",
+    );
+    refuse(
+        "src/bureau/clavier.rs",
+        "ToUnicodeEx(\n    // OCTET_BAS\n    balayage,\n)",
+        "src/bureau/clavier.rs:1 : ToUnicodeEx sans l'octet bas du balayage",
+    );
+    admet(
+        "src/domaine/texte.rs",
+        "/// `ToUnicodeEx(vk, balayage)` produit…",
     );
 }

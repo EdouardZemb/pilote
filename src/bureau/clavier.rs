@@ -1,5 +1,6 @@
-//! Le clavier : l'envoi d'un lot (`SendInput`), la disposition du fil focalisé (décision 2), relue
-//! à chaque appel, les touches de modification enfoncées et Verr. Maj.
+//! Le clavier : l'envoi d'un lot (`SendInput`), la disposition du fil focalisé (ADR-0006, « Les
+//! touches et les textes à taper »), relue à chaque appel, les touches de modification enfoncées et
+//! Verr. Maj.
 
 use super::hwnd_de;
 use super::id_non_nul;

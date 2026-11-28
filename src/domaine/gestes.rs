@@ -3,13 +3,14 @@
 //! vérifié avant chacune (ADR-0005, « Les gestes et l'ordre des gardes »). Tout se décide ici
 //! contre le trait `Bureau`.
 //!
-//! L'ordre : l'analyse (décision 5), qui ne lit aucune fenêtre ; le journal, qu'exige toute
-//! commande valide ; la fenêtre retenue, avec la liste de refus et la règle de KeePassXC
-//! (décision 3) ; le verrou des gestes ; le poste verrouillé (décision 10) ; le niveau d'intégrité
-//! (décision 1) ; les touches enfoncées ; Verr. Maj, pour `taper --comme-au-clavier` seulement
-//! (décision 9) ; l'activation (décision 8) ; le refus et la règle de KeePassXC rejugés sur W
-//! relue ; les touches enfoncées de nouveau ; le calcul de tous les lots ; puis, pour chaque unité,
-//! le premier plan accepté (décision 11), l'envoi et la cadence (décision 13). Un refus d'avant
+//! L'ordre, chaque section citée étant d'ADR-0005 : l'analyse, qui ne lit aucune fenêtre ; le
+//! journal, qu'exige toute commande valide ; la fenêtre retenue, avec la liste de refus et la règle
+//! de KeePassXC (« KeePassXC ») ; le verrou des gestes ; le poste verrouillé (« Le poste
+//! verrouillé ») ; le niveau d'intégrité (« Le niveau d'intégrité se juge par comparaison ») ; les
+//! touches enfoncées ; Verr. Maj, pour `taper --comme-au-clavier` seulement ; l'activation
+//! (« L'activation ») ; le refus et la règle de KeePassXC rejugés sur W relue ; les touches
+//! enfoncées de nouveau ; le calcul de tous les lots ; puis, pour chaque unité, le premier plan
+//! accepté (« Le premier plan accepté »), l'envoi et la cadence (« La cadence »). Un refus d'avant
 //! l'activation n'a rien restauré, rien demandé, rien envoyé.
 
 use crate::domaine::bureau::Bureau;
@@ -69,8 +70,8 @@ use std::panic::catch_unwind;
 pub const ATTENTE_DU_VERROU: Duree = Duree(5_000);
 
 /// L'attente après chaque unité frappée, avant de vérifier le premier plan pour la suivante
-/// (décision 13) : sans elle, des milliers d'événements resteraient en file et partiraient vers
-/// une fenêtre qui aurait volé le premier plan après le dernier contrôle.
+/// (ADR-0005, « La cadence ») : sans elle, des milliers d'événements resteraient en file et
+/// partiraient vers une fenêtre qui aurait volé le premier plan après le dernier contrôle.
 pub const CADENCE: Duree = Duree(5);
 
 /// Le pas des sondes de la restauration et du premier plan.
@@ -113,7 +114,7 @@ enum Travail {
         frappe: Option<Frappe>,
     },
     /// Une sous-commande que clap accepte et que la tranche ne livre pas, par son nom : une
-    /// commande valide, qui exige le journal avant de sortir en 64 (décision 4).
+    /// commande valide, qui exige le journal avant de sortir en 64 (ADR-0006, « L'analyse »).
     PasEncoreLivree(&'static str),
 }
 
@@ -310,8 +311,9 @@ pub fn executer(args: &[OsString], b: &mut dyn Bureau) -> Issue {
 /// commande valide, puis son travail : `fenetres`, un geste, ou le 64 d'une sous-commande pas
 /// encore livrée.
 fn derouler(args: &[OsString], s: &mut Suivi, b: &mut dyn Bureau) -> Issue {
-    // 1. L'analyse (décision 5) : clap, les touches de `touche`, le texte de `taper`. Rien n'y lit
-    // une fenêtre, et son refus garde son code, que le journal s'ouvre ou non.
+    // 1. L'analyse (ADR-0006, « L'analyse ») : clap, les touches de `touche`, le texte de
+    // `taper`. Rien n'y lit une fenêtre, et son refus garde son code, que le journal s'ouvre ou
+    // non.
     let travail = match analyser_le_travail(args, s, b) {
         Ok(travail) => travail,
         Err(issue) => return issue,
@@ -512,8 +514,9 @@ fn geste(
     Ok(Issue::fait(Vec::new()))
 }
 
-/// Le refus de KeePassXC (décision 3), pour `touche` et `taper` (`frappe`) : quand le processus de
-/// `w`, ou celui d'une de ses fenêtres enfants, est KeePassXC. `activer` vers lui reste permis.
+/// Le refus de KeePassXC (ADR-0005, « KeePassXC »), pour `touche` et `taper` (`frappe`) : quand le
+/// processus de `w`, ou celui d'une de ses fenêtres enfants, est KeePassXC. `activer` vers lui
+/// reste permis.
 fn refuser_keepassxc(frappe: bool, w: &FenetreLue, tous: &[Processus]) -> Result<(), Arret> {
     if frappe && keepassxc_dans(w, tous) {
         return Err(Arret::Refus(KEEPASSXC.into()));
@@ -521,17 +524,18 @@ fn refuser_keepassxc(frappe: bool, w: &FenetreLue, tous: &[Processus]) -> Result
     Ok(())
 }
 
-/// Vrai si le poste est verrouillé (décision 10) : le bureau d'entrée n'est pas `Default` ou ne se
-/// lit pas ; les drapeaux lus disent « verrouillé » ; l'état lu n'est pas « actif ». Des drapeaux
-/// inconnus ou illisibles, et un état illisible, ne verrouillent pas à eux seuls.
+/// Vrai si le poste est verrouillé (ADR-0005, « Le poste verrouillé ») : le bureau d'entrée n'est
+/// pas `Default` ou ne se lit pas ; les drapeaux lus disent « verrouillé » ; l'état lu n'est pas
+/// « actif ». Des drapeaux inconnus ou illisibles, et un état illisible, ne verrouillent pas à eux
+/// seuls.
 fn poste_verrouille(s: &EtatSession) -> bool {
     s.bureau_d_entree.as_deref() != Some(BUREAU_PAR_DEFAUT)
         || s.drapeaux == Some(WTS_VERROUILLE)
         || s.etat.is_some_and(|etat| etat != WTS_ACTIF)
 }
 
-/// Le niveau d'intégrité (décision 1) : refus si celui de P dépasse celui de `pilote`, ou si l'un
-/// des deux ne se lit pas.
+/// Le niveau d'intégrité (ADR-0005, « Le niveau d'intégrité se juge par comparaison ») : refus si
+/// celui de P dépasse celui de `pilote`, ou si l'un des deux ne se lit pas.
 fn juger_le_niveau(r: &Retenue, b: &mut dyn Bureau) -> Result<(), Arret> {
     let cible = b.niveau_integrite(Some(r.processus.pid));
     let pilote = b.niveau_integrite(None);
@@ -551,16 +555,16 @@ fn exiger_les_modificateurs_relaches(b: &mut dyn Bureau) -> Result<(), Arret> {
     }
 }
 
-/// L'activation de W (décision 8), qui rend le premier plan accepté. Une fenêtre réduite se
-/// restaure, puis se sonde jusqu'à ne plus l'être : la restauration part sans attendre la fenêtre
-/// (`ShowWindowAsync`), dont le retour ne dit pas qu'elle est faite. Rien de plus si le premier
-/// plan est accepté. Sinon, un mouvement de souris nul, la demande, une sonde ; puis, en un seul
-/// envoi, Alt gauche entourant 0xE8, que Windows n'attribue à rien, sans jamais frapper Alt seule,
-/// qui ouvrirait le mode menu d'une fenêtre Win32 ; une sonde du relâchement des modificateurs,
-/// refus sans demande s'ils restent enfoncés ; la demande, une sonde ; sinon, refus. Un de ces deux
-/// envois que `SendInput` n'insère pas du tout ne fait pas sortir : l'activation suit son cours et
-/// se juge au premier plan relu ; inséré en partie, il sort en 3, après le relâchement tenté
-/// (`Suivi::envoyer_pour_activer`).
+/// L'activation de W (ADR-0005, « L'activation »), qui rend le premier plan accepté. Une fenêtre
+/// réduite se restaure, puis se sonde jusqu'à ne plus l'être : la restauration part sans attendre
+/// la fenêtre (`ShowWindowAsync`), dont le retour ne dit pas qu'elle est faite. Rien de plus si le
+/// premier plan est accepté. Sinon, un mouvement de souris nul, la demande, une sonde ; puis, en un
+/// seul envoi, Alt gauche entourant 0xE8, que Windows n'attribue à rien, sans jamais frapper Alt
+/// seule, qui ouvrirait le mode menu d'une fenêtre Win32 ; une sonde du relâchement des
+/// modificateurs, refus sans demande s'ils restent enfoncés ; la demande, une sonde ; sinon, refus.
+/// Un de ces deux envois que `SendInput` n'insère pas du tout ne fait pas sortir : l'activation
+/// suit son cours et se juge au premier plan relu ; inséré en partie, il sort en 3, après le
+/// relâchement tenté (`Suivi::envoyer_pour_activer`).
 fn activer(r: &Retenue, s: &mut Suivi, b: &mut dyn Bureau) -> Result<PremierPlan, Arret> {
     let w = r.fenetre.id;
     let refus = || Arret::Refus(PREMIER_PLAN_REFUSE.into());
@@ -596,11 +600,11 @@ fn activer(r: &Retenue, s: &mut Suivi, b: &mut dyn Bureau) -> Result<PremierPlan
     attendre_le_premier_plan(r, b)?.ok_or_else(refus)
 }
 
-/// Le premier plan, s'il est accepté pour la retenue `r` (décision 11), jugé sur l'instantané des
-/// processus relu juste après lui. L'instantané prend du temps sur le vrai poste : le premier plan
-/// se relit après lui, et doit être le même qu'avant. C'est cette dernière lecture qui se juge et
-/// se rend, pour que l'envoi qui suit parte juste après elle : une fenêtre qui prend le premier
-/// plan pendant l'instantané ne reçoit rien.
+/// Le premier plan, s'il est accepté pour la retenue `r` (ADR-0005, « Le premier plan accepté »),
+/// jugé sur l'instantané des processus relu juste après lui. L'instantané prend du temps sur le
+/// vrai poste : le premier plan se relit après lui, et doit être le même qu'avant. C'est cette
+/// dernière lecture qui se juge et se rend, pour que l'envoi qui suit parte juste après elle : une
+/// fenêtre qui prend le premier plan pendant l'instantané ne reçoit rien.
 fn premier_plan_accepte(r: &Retenue, b: &mut dyn Bureau) -> Result<Option<PremierPlan>, Arret> {
     let avant = b.premier_plan();
     let tous = b.processus().map_err(echec_systeme)?;
@@ -1448,7 +1452,7 @@ mod tests {
         );
     }
     // `fenetres` lit les fenêtres, puis l'instantané des processus, puis le premier plan, et rien
-    // d'autre ; ses lignes sont celles de la décision 7.
+    // d'autre ; ses lignes sont celles d'ADR-0006, « Les sorties de la tranche 1 ».
     #[test]
     fn fenetres_ecrit_ses_lignes_sans_les_gardes() {
         let mut b = FauxBureau::avec_appli();

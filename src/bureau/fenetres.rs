@@ -12,12 +12,16 @@ use crate::domaine::fenetre::FenetreLue;
 use crate::domaine::fenetre::IdFenetre;
 use crate::domaine::fenetre::PremierPlan;
 use core::ffi::c_void;
+use std::thread;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Foundation::LPARAM;
 use windows::Win32::Graphics::Dwm::DWMWA_CLOAKED;
 use windows::Win32::Graphics::Dwm::DwmGetWindowAttribute;
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
+use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
+use windows::Win32::System::Com::CoInitializeEx;
 use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::System::Com::CoUninitialize;
 use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
@@ -47,14 +51,49 @@ const PROPRIETAIRES_MAX: usize = 16;
 /// La plus longue classe de fenêtre que Windows admet, NUL compris.
 const CLASSE_MAX: usize = 257;
 
-/// Les fenêtres de premier niveau, dans l'ordre d'`EnumWindows`, chacune lue.
+/// Les fenêtres de premier niveau, dans l'ordre d'`EnumWindows`, chacune lue, son AUMID compris.
 pub fn fenetres() -> Result<Vec<FenetreLue>, ErreurSysteme> {
     let mut hwnds: Vec<HWND> = Vec::new();
     // SAFETY: `collecter` ne reçoit que le pointeur vers `hwnds`, qui vit jusqu'au retour
     // d'`EnumWindows`, lequel n'appelle le rappel que pendant l'appel.
     unsafe { EnumWindows(Some(collecter), LPARAM(&raw mut hwnds as isize)) }
         .map_err(|e| ErreurSysteme(format!("EnumWindows : {e}")))?;
-    Ok(hwnds.into_iter().map(lire).collect())
+    let aumids = aumids(&hwnds);
+    Ok(hwnds
+        .into_iter()
+        .zip(aumids)
+        .map(|(h, aumid)| lire(h, aumid))
+        .collect())
+}
+
+/// Les AUMID des fenêtres `hwnds`, dans leur ordre, lus ensemble sur un seul fil neuf, initialisé
+/// en STA (ADR-0005, « Ce que la tranche 2 précise ou change ») : le fil de la commande est en MTA,
+/// et la documentation de `SHGetPropertyStoreForWindow` ne dit pas sa lecture sous lui ; en STA,
+/// c'est celle des essais, qui la lisent dans un processus en STA, si bien que l'essai des
+/// Paramètres dit ce que lit `pilote`. Un fil par énumération, et non par fenêtre, garde le coût
+/// d'une commande. Le fil reçoit les identifiants des fenêtres, des entiers, puisqu'un `HWND`
+/// n'est pas `Send`. Un AUMID illisible vaut `None`, que le domaine juge ; un fil qui ne naît
+/// pas, ou qui panique, rend `None` pour chaque fenêtre, sans que la panique traverse `join`.
+fn aumids(hwnds: &[HWND]) -> Vec<Option<String>> {
+    let ids: Vec<IdFenetre> = hwnds.iter().copied().map(id_de).collect();
+    let nombre = ids.len();
+    thread::Builder::new()
+        .name("aumid".into())
+        .spawn(move || {
+            // SAFETY: aucun argument réservé ; un appel sur ce fil neuf, équilibré plus bas par
+            // `CoUninitialize` s'il a réussi, S_FALSE compris.
+            let com = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+            let lus: Vec<Option<String>> = ids.into_iter().map(hwnd_de).map(aumid).collect();
+            if com.is_ok() {
+                // SAFETY: équilibre l'initialisation réussie de ce fil, après la dernière lecture,
+                // dont chaque interface est déjà relâchée.
+                unsafe { CoUninitialize() };
+            }
+            lus
+        })
+        .ok()
+        .and_then(|fil| fil.join().ok())
+        .unwrap_or_else(|| vec![None; nombre])
 }
 
 /// Le rappel d'`EnumWindows` et d'`EnumChildWindows` : ajoute la fenêtre à la liste que porte
@@ -67,8 +106,8 @@ unsafe extern "system" fn collecter(h: HWND, liste: LPARAM) -> BOOL {
     BOOL::from(true)
 }
 
-/// La fenêtre `h`, lue.
-fn lire(h: HWND) -> FenetreLue {
+/// La fenêtre `h`, lue, avec son AUMID `aumid`, déjà lu par `aumids`.
+fn lire(h: HWND, aumid: Option<String>) -> FenetreLue {
     FenetreLue {
         id: id_de(h),
         pid: pid_de(h),
@@ -80,7 +119,7 @@ fn lire(h: HWND) -> FenetreLue {
         outil: outil(h),
         proprietaire: proprietaire(h),
         reduite: reduite(h),
-        aumid: aumid(h),
+        aumid,
         pids_enfants: pids_enfants(h),
     }
 }
@@ -157,6 +196,7 @@ fn reduite(h: HWND) -> bool {
 }
 
 /// L'AUMID de la fenêtre `h` (`PKEY_AppUserModel_ID`) ; `None` s'il est vide ou ne se lit pas.
+/// Il se lit sur le fil d'`aumids`, en STA.
 fn aumid(h: HWND) -> Option<String> {
     // SAFETY: le magasin se lit puis se relâche à sa sortie de portée ; la valeur lue est vidée
     // par `PropVariantClear`, et le texte alloué libéré par `CoTaskMemFree`, sur tous les chemins.

@@ -31,8 +31,8 @@ pub enum EtatVerrou {
     Occupe,
 }
 
-/// Les trois faits lus qui disent si le poste est verrouillé (décision 10) : le nom du bureau
-/// d'entrée (`OpenInputDesktop`), puis les drapeaux et l'état de la session
+/// Les trois faits lus qui disent si le poste est verrouillé (ADR-0005, « Le poste verrouillé ») :
+/// le nom du bureau d'entrée (`OpenInputDesktop`), puis les drapeaux et l'état de la session
 /// (`WTSQuerySessionInformationW`, `WTSSessionInfoEx`). `None` : le fait ne se lit pas.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct EtatSession {
@@ -55,7 +55,8 @@ pub const WTS_INCONNU: i32 = -1;
 pub const WTS_ACTIF: i32 = 0;
 
 /// Le poste, tel que le domaine le lit et y agit. La disposition du clavier du fil focalisé
-/// (décision 2) en fait partie, par le super-trait `Disposition`.
+/// (ADR-0006, « Les touches et les textes à taper ») en fait partie, par le super-trait
+/// `Disposition`.
 pub trait Bureau: Disposition {
     /// L'instant présent, sur une horloge monotone.
     fn maintenant(&mut self) -> Moment;

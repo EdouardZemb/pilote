@@ -1,7 +1,8 @@
 //! Les touches de `touche` : leurs noms, leurs combinaisons, celles que `pilote` refuse, et le lot
-//! d'événements qui frappe une combinaison. L'analyse ne lit aucune fenêtre (décision 5) : une
-//! combinaison interdite sort en 1, un nom inconnu en 64, le texte reçu échappé dans le message
-//! (décision 6). Chaque lot relâche ce qu'il enfonce, dans l'ordre inverse.
+//! d'événements qui frappe une combinaison. L'analyse ne lit aucune fenêtre (ADR-0006,
+//! « L'analyse ») : une combinaison interdite sort en 1, un nom inconnu en 64, le texte reçu
+//! échappé dans le message (ADR-0006, « Les messages »). Chaque lot relâche ce qu'il enfonce, dans
+//! l'ordre inverse.
 
 use crate::domaine::sortie::Arret;
 use crate::domaine::sortie::echapper;
@@ -25,7 +26,8 @@ pub enum Evenement {
 
 /// Une touche nommée sur la ligne de commande. `F` va de 1 à 12 ; `Lettre` est une majuscule, de
 /// A à Z. `Barre` et `Interrogation` sont les caractères `/` et `?`, que la disposition du clavier
-/// place (décision 9) : ils n'ont pas de touche virtuelle fixe.
+/// place (ADR-0006, « Les touches et les textes à taper ») : ils n'ont pas de touche virtuelle
+/// fixe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NomTouche {
     Tab,
@@ -239,7 +241,8 @@ pub fn caractere(touche: NomTouche) -> Option<char> {
 /// `MapVirtualKeyExW` (`MAPVK_VK_TO_VSC_EX`) : son octet bas est le code de balayage, et
 /// l'événement est étendu quand son octet haut vaut 0xE0, ou quand `vk` est l'une de 0x21 à 0x28,
 /// 0x2D ou 0x2E (PageHaut, PageBas, Fin, Debut, les flèches, Inser, Suppr), dont
-/// `MapVirtualKeyExW` rend le code du pavé numérique, sans 0xE0 (décision 9).
+/// `MapVirtualKeyExW` rend le code du pavé numérique, sans 0xE0 (ADR-0006, « Les touches et les
+/// textes à taper »).
 pub fn evenement(vk: u8, balayage_ex: u16, relachee: bool) -> Evenement {
     let [haut, bas] = balayage_ex.to_be_bytes();
     let etendue = haut == 0xE0 || matches!(vk, vk::PAGE_HAUT..=vk::BAS | vk::INSER | vk::SUPPR);
@@ -551,7 +554,8 @@ mod tests {
         }
     }
 
-    // Le texte reçu entre échappé dans les deux messages : il tient en une ligne (décision 6).
+    // Le texte reçu entre échappé dans les deux messages : il tient en une ligne (ADR-0006, « Les
+    // messages »).
     #[test]
     fn touche_recue_echappee() {
         assert_eq!(

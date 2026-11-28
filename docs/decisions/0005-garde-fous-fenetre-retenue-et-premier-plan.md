@@ -2,6 +2,7 @@
 
 - **Statut** : accepté le 2026-11-21
 - **Contexte amont** : [ADR-0002](0002-garde-fous-dans-le-code.md), qu'il remplace ; le plan maître du lot 1, `.claude/plans/lot1-l-outil-et-l-essai-de-pupitre.md`, décisions 5, 6 et 9 ; le plan de sa tranche 1, `.claude/plans/lot1-tranche1-le-socle-le-clavier-et-l-application-d-essai.md`, décisions 1, 3, 5, 8, 10, 11 et 13
+- **Amendé** le 2026-11-28 : tranche 2 du lot 1 — COM en MTA ; aucune valeur par le cache de l'automatisation ni par les motifs LegacyIAccessible et Text
 
 ## Contexte
 
@@ -101,6 +102,11 @@ des processus relu : rien de né après la retenue, aucun descendant dont le PID
 Un élément que l'automatisation marque comme mot de passe (`IsPassword`) ne rend sa valeur ni par
 `valeur`, qui refuse (1), ni par `arbre`, ni par `trouver`, qui écrivent `motdepasse=oui` à la place,
 quelle que soit l'application.
+
+Aucune valeur ne passe par le cache de l'automatisation, ni par les motifs LegacyIAccessible et
+Text, qui la portent aussi : le contrôle statique refuse dans `src/` leurs noms et celui de la
+propriété de la valeur. Une tranche qui aurait besoin du motif Text ne lève la règle qu'avec un
+marquage relu juste avant (`CurrentIsPassword`), jugé dans le domaine et testé.
 
 ### KeePassXC
 
@@ -321,9 +327,12 @@ Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
   fenêtre candidate.
 - `ToUnicodeEx` reçoit l'octet bas du balayage : le préfixe 0xE0 d'une touche étendue pose le bit
   15, que `ToUnicodeEx` lit comme « touche relâchée », et rien ne serait produit.
-- `CoInitializeEx(COINIT_APARTMENTTHREADED)` s'appelle une fois dans `lancer`, pour lire l'AUMID,
-  qui se lit par une interface COM : sans COM, aucun AUMID ne se lirait, et le cadre réduit d'une
-  autre application du Store serait refusé à tort.
+- L'AUMID se lit par une interface COM : sans COM, aucun AUMID ne se lirait, et le cadre réduit
+  d'une autre application du Store serait refusé à tort. Depuis la tranche 2, `lancer` initialise
+  COM en MTA (`CoInitializeEx(COINIT_MULTITHREADED)`), et les AUMID d'une énumération se lisent
+  ensemble sur un seul fil neuf, initialisé en STA (`COINIT_APARTMENTTHREADED`), un fil par
+  énumération ; limite, aucun essai n'éprouve en CI la lecture de l'AUMID d'une autre application
+  du Store (« Ce que la tranche 2 précise ou change »).
 - Le premier plan se relit après l'instantané des processus, et doit égaler celui d'avant
   (`premier_plan_accepte`) : l'instantané prend quelques millisecondes, pendant lesquelles une autre
   fenêtre peut prendre le premier plan.
@@ -361,6 +370,28 @@ Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
   un `taper` de 10 000 caractères dure donc de l'ordre de 100 s : les 5 ms de `CADENCE` ne sont
   qu'un plancher, auquel s'ajoute la garde du premier plan relue avant chaque unité.
 
+### Ce que la tranche 2 précise ou change
+
+Précisé par le plan de la tranche 2 du lot 1, qu'Edouard a accepté le 28/11/2026.
+
+- COM s'initialise en MTA dans `lancer` (`CoInitializeEx(COINIT_MULTITHREADED)`), et non plus en
+  STA : le client de l'automatisation y vit sans fil d'interface, et une application figée ne
+  bloque pas `pilote` sur une pompe de messages.
+- Les AUMID d'une énumération se lisent ensemble sur un seul fil neuf, initialisé en STA
+  (`COINIT_APARTMENTTHREADED`), puis `CoUninitialize` et `join` : leur lecture ne dépend pas du
+  modèle du fil principal, que la documentation de `SHGetPropertyStoreForWindow` ne dit pas, et
+  c'est celle des essais, qui lisent l'AUMID dans un processus en STA, si bien que l'essai des
+  Paramètres dit ce que lit `pilote`. Un fil par énumération, et non par fenêtre, garde le coût
+  d'une commande. Un fil qui ne naît pas, ou qui panique, rend `None` pour chaque fenêtre, sans
+  que la panique sorte du fil, et une lecture ratée `None` pour la sienne : le domaine refuse le
+  cadre sans AUMID dont aucun enfant d'un autre processus ne se lit (« La liste de refus »).
+- Limite : faute d'une autre application du Store sur le runner, aucun essai ne prouve qu'un AUMID
+  d'une autre application se lit ; un AUMID perdu ne refuserait à tort que le cadre réduit d'une
+  telle application.
+- Aucune valeur ne passe par le cache de l'automatisation, ni par les motifs LegacyIAccessible et
+  Text, qui la portent aussi : le contrôle statique refuse leurs noms dans `src/`, avec celui de la
+  propriété de la valeur (« Les valeurs secrètes ne sortent jamais »).
+
 ## Conséquences
 
 - Changer un refus demande une PR, relue, avec ses tests.
@@ -372,6 +403,22 @@ Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
 - Un `taper` coûte de l'ordre de 10 ms par unité : une session le compte dans ses attentes.
 - **Difficile à changer** : rien de technique ; c'est une frontière de sécurité, qui ne s'élargit
   qu'avec l'accord d'Edouard.
+
+## Confirmation
+
+Les règles et les tests qui les tiennent, nommés par leur chemin :
+
+- **Aucun `SetValue`** : `tests/statique.rs`, `refuse_set_value_partout` et
+  `sources_respectent_les_regles`.
+- **Aucune valeur par le cache de l'automatisation, ni par les motifs LegacyIAccessible et Text**
+  (« Les valeurs secrètes ne sortent jamais ») : `tests/statique.rs`,
+  `refuse_le_jeton_et_les_chemins_de_la_valeur_dans_src`,
+  `chaque_mot_du_jeton_et_des_valeurs_a_sa_plantation` et `sources_respectent_les_regles`.
+- **`ToUnicodeEx` reçoit l'octet bas du balayage** (« Ce qui précise ou change le plan de la
+  tranche ») : `tests/statique.rs`, `refuse_to_unicode_ex_hors_du_clavier`,
+  `refuse_to_unicode_ex_sans_l_octet_bas`, `to_unicode_ex_compte_sa_ligne_et_ses_trois_suivantes`
+  et `sources_respectent_les_regles` : un appel hors de `src/bureau/clavier.rs`, ou sans
+  `OCTET_BAS` sur sa ligne ni sur l'une des trois suivantes, le fait échouer.
 
 ## Révision
 

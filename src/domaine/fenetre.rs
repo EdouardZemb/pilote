@@ -1,9 +1,10 @@
 //! Les fenêtres : celles qui comptent (les candidates), la fenêtre retenue W et son processus P,
-//! le premier plan accepté avant chaque unité (décision 11), et les lignes de `fenetres`
-//! (décision 7). `--fenetre` nomme les racines, `--pid` en garde une seule ; les candidates de leur
-//! arbre comptent, les refusées écartées ; `--titre` départage par égalité exacte. Un nom de
-//! processus s'écrit sans `.exe`, et tout texte venu du système passe par `echapper` avant d'entrer
-//! dans un message, un titre entre chevrons.
+//! le premier plan accepté avant chaque unité (ADR-0005, « Le premier plan accepté »), et les
+//! lignes de `fenetres` (ADR-0006, « Les sorties de la tranche 1 »). `--fenetre` nomme les
+//! racines, `--pid` en garde une seule ; les candidates de leur arbre comptent, les refusées
+//! écartées ; `--titre` départage par égalité exacte. Un nom de processus s'écrit sans `.exe`, et
+//! tout texte venu du système passe par `echapper` avant d'entrer dans un message, un titre entre
+//! chevrons.
 
 use crate::domaine::cli::Cible;
 use crate::domaine::processus::Processus;
@@ -195,15 +196,16 @@ fn nom_du_processus(pid: u32, tous: &[Processus]) -> &str {
     processus_de(pid, tous).map_or("", |p| sans_exe(&p.nom))
 }
 
-/// La clé de l'ordre des fenêtres (décision 7) : le nom du processus, sans égard à la casse puis
-/// tel quel, puis le PID, puis le titre.
+/// La clé de l'ordre des fenêtres (ADR-0006, « Les sorties de la tranche 1 ») : le nom du
+/// processus, sans égard à la casse puis tel quel, puis le PID, puis le titre.
 fn cle<'a>(f: &'a FenetreLue, tous: &'a [Processus]) -> (String, &'a str, u32, &'a str) {
     let nom = nom_du_processus(f.pid, tous);
     (nom.to_lowercase(), nom, f.pid, &f.titre)
 }
 
-/// La fenêtre dont le fil donne la disposition du clavier (décision 2) : la fenêtre focalisée, à
-/// défaut l'active, à défaut celle du premier plan ; `None` si les trois manquent.
+/// La fenêtre dont le fil donne la disposition du clavier (ADR-0006, « Les touches et les textes à
+/// taper ») : la fenêtre focalisée, à défaut l'active, à défaut celle du premier plan ; `None` si
+/// les trois manquent.
 pub fn fil_focalise(
     focus: Option<IdFenetre>,
     active: Option<IdFenetre>,
@@ -530,10 +532,10 @@ mod tests {
         );
     }
 
-    // L'ordre de `fenetres` (décision 7), lu par ses valeurs : le nom de processus d'abord, sans
-    // égard à la casse (`Gamma` après `beta`), puis tel quel (`Beta` avant `beta`), puis le PID à
-    // nom égal, puis le titre à PID égal ; les non-candidates n'y paraissent pas, et sans premier
-    // plan aucune ligne ne porte `premier-plan=oui`.
+    // L'ordre de `fenetres` (ADR-0006, « Les sorties de la tranche 1 »), lu par ses valeurs : le
+    // nom de processus d'abord, sans égard à la casse (`Gamma` après `beta`), puis tel quel (`Beta`
+    // avant `beta`), puis le PID à nom égal, puis le titre à PID égal ; les non-candidates n'y
+    // paraissent pas, et sans premier plan aucune ligne ne porte `premier-plan=oui`.
     #[test]
     fn fenetres_triees_par_nom_puis_pid_puis_titre() {
         let t = [

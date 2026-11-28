@@ -1,10 +1,11 @@
 //! Les textes de `taper` : leur décodage, quelle que soit leur source, ce qu'ils admettent et leur
-//! borne (décision 5) ;
-//! leur découpe en unités ; et les deux façons de les frapper. Sans la disposition, chaque
-//! caractère part en unités UTF-16 (`KEYEVENTF_UNICODE`), Entrée et Tab par leurs touches. Par la
-//! disposition du clavier (`--comme-au-clavier`, `barre`, `interrogation`), chaque caractère part
-//! par la touche et les modificateurs que la disposition lui donne, et refuse quand elle ne le
-//! produit pas exactement (décision 9). Chaque lot relâche ce qu'il enfonce, dans l'ordre inverse.
+//! borne (ADR-0006, « Les touches et les textes à taper » et « Les bornes ») ; leur découpe en
+//! unités ; et les deux façons de les frapper. Sans la disposition, chaque caractère part en unités
+//! UTF-16 (`KEYEVENTF_UNICODE`), Entrée et Tab par leurs touches. Par la disposition du clavier
+//! (`--comme-au-clavier`, `barre`, `interrogation`), chaque caractère part par la touche et les
+//! modificateurs que la disposition lui donne, et refuse quand elle ne le produit pas exactement
+//! (ADR-0006, « Les touches et les textes à taper »). Chaque lot relâche ce qu'il enfonce, dans
+//! l'ordre inverse.
 
 use crate::domaine::sortie::Arret;
 use crate::domaine::sortie::echapper;
@@ -172,7 +173,8 @@ pub enum Produit {
     Texte(String),
 }
 
-/// La disposition du clavier du fil focalisé (décision 2), que la couche Windows lit.
+/// La disposition du clavier du fil focalisé (ADR-0006, « Les touches et les textes à taper »), que
+/// la couche Windows lit.
 pub trait Disposition {
     /// `VkKeyScanExW` : l'état des modificateurs (octet haut) et la touche virtuelle (octet bas)
     /// qui donnent l'unité UTF-16 `unite` ; -1 si aucune touche ne la donne.
@@ -184,12 +186,13 @@ pub trait Disposition {
     fn balayage(&mut self, vk: u8) -> u16;
 }
 
-/// Le lot qui frappe `c` par la disposition du clavier du fil focalisé (décision 9). `\n` et `\t`
-/// donnent Entrée et Tab, sans modificateur et sans rien demander à la disposition que leurs
-/// balayages. Tout autre caractère prend la touche et l'état que rend `scan` : l'état 0 frappe la
-/// touche seule, l'état 1 Maj gauche, l'état 6 (AltGr) Ctrl gauche puis Alt droite, l'état 7 Maj
-/// gauche, Ctrl gauche puis Alt droite ; puis la touche, puis les relâchements dans l'ordre
-/// inverse (`touches::lot_touches`). Chaque touche lit son balayage une fois.
+/// Le lot qui frappe `c` par la disposition du clavier du fil focalisé (ADR-0006, « Les touches et
+/// les textes à taper »). `\n` et `\t` donnent Entrée et Tab, sans modificateur et sans rien
+/// demander à la disposition que leurs balayages. Tout autre caractère prend la touche et l'état
+/// que rend `scan` : l'état 0 frappe la touche seule, l'état 1 Maj gauche, l'état 6 (AltGr) Ctrl
+/// gauche puis Alt droite, l'état 7 Maj gauche, Ctrl gauche puis Alt droite ; puis la touche, puis
+/// les relâchements dans l'ordre inverse (`touches::lot_touches`). Chaque touche lit son balayage
+/// une fois.
 ///
 /// Il refuse en 1, « caractère absent du clavier : « <c> » », un caractère hors du plan de base,
 /// que `scan` ne lit pas, puis tout autre état : -1 (aucune touche), Ctrl sans Alt (2, 3), Alt

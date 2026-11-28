@@ -2,7 +2,7 @@
 //! CI : l'activation, le premier plan volé pendant une frappe, la fenêtre retenue parmi plusieurs,
 //! la liste de refus et la règle de KeePassXC sur des copies renommées et sur les vrais Paramètres,
 //! le verrou des gestes, le journal dans le profil redirigé, la sortie en UTF-8 et la version. Ils
-//! pilotent le bureau, et ne tournent jamais sur le poste (décision 13 du plan maître).
+//! pilotent le bureau, et ne tournent jamais sur le poste (`CLAUDE.md` : la CI seule les lance).
 
 #![cfg(windows)]
 
@@ -36,7 +36,7 @@ const PARAMETRES_MAX: Duration = Duration::from_secs(15);
 /// autant d'unités sont parties.
 const SAISIES_AVANT_LE_VOL: usize = 100;
 
-/// Le message du refus de KeePassXC (décision 3).
+/// Le message du refus de KeePassXC (ADR-0005, « KeePassXC »).
 const KEEPASSXC: &str = "KeePassXC : touche et taper sont refusés dans cette version";
 
 /// Le message du refus des Paramètres, le nom gardant la casse de l'exécutable.
@@ -386,7 +386,8 @@ fn copie_systemsettings_refusee() {
     assert!(!a_recu_une_frappe(&copie), "{:?}", copie.lignes());
 }
 
-/// Une copie nommée `KeePassXC` refuse `taper` et `touche` en 1 (décision 3) : rien ne part.
+/// Une copie nommée `KeePassXC` refuse `taper` et `touche` en 1 (ADR-0005, « KeePassXC ») : rien
+/// ne part.
 #[ignore = "il pilote le bureau : la CI le lance"]
 #[test]
 fn copie_keepassxc_refuse_taper_et_touche() {
