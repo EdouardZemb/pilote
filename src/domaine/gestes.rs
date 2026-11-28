@@ -195,12 +195,12 @@ impl Suivi {
 
 /// `Ok` si `SendInput` a inséré les `inseres` événements de `lot`, tous ; sinon 3, « SendInput a
 /// inséré <k> événements sur <n> ». `SendInput` insère dans l'ordre : une insertion partielle a
-/// enfoncé, dans le début inséré du lot, des touches que la fin devait relâcher, et qui resteraient
-/// enfoncées pour tout le poste. Leurs relâchements (`relachements`) partent alors d'un seul envoi,
-/// sans garde du premier plan, puisqu'ils ne tapent rien, et le message dit combien Windows en a
-/// insérés : « ; relâchement : <m> sur <p> ». Le relâchement est tenté, sans garantie : ce qui a
-/// refusé la fin du lot, comme un bureau sécurisé, peut le refuser aussi. Quand le début inséré
-/// n'a rien laissé enfoncé, rien ne part, et le message s'arrête à l'envoi.
+/// enfoncé, dans le début inséré du lot, des touches ou des boutons que la fin devait relâcher, et
+/// qui resteraient enfoncés pour tout le poste. Leurs relâchements (`relachements`) partent alors
+/// d'un seul envoi, sans garde du premier plan, puisqu'ils ne tapent rien, et le message dit
+/// combien Windows en a insérés : « ; relâchement : <m> sur <p> ». Le relâchement est tenté, sans
+/// garantie : ce qui a refusé la fin du lot, comme un bureau sécurisé, peut le refuser aussi. Quand
+/// le début inséré n'a rien laissé enfoncé, rien ne part, et le message s'arrête à l'envoi.
 fn insertion_complete(b: &mut dyn Bureau, lot: &[Evenement], inseres: u32) -> Result<(), Arret> {
     let k = usize::try_from(inseres).unwrap_or(usize::MAX);
     if k == lot.len() {
@@ -222,11 +222,13 @@ fn insertion_complete(b: &mut dyn Bureau, lot: &[Evenement], inseres: u32) -> Re
 }
 
 /// Les relâchements de ce que `debut`, le début inséré d'un lot, a enfoncé sans le relâcher :
-/// chaque touche et chaque unité UTF-16 restées enfoncées, relâchées dans l'ordre inverse de leur
-/// enfoncement, une touche avec le balayage et l'extension de son enfoncement. Quand une Alt, gauche
-/// ou droite, est à relâcher, 0xE8, que Windows n'attribue à rien, est d'abord enfoncée puis
-/// relâchée : une Alt relâchée seule ouvrirait le mode menu de la fenêtre au premier plan. Cette
-/// frappe de 0xE8 relâche aussi 0xE8, si le début l'a laissée enfoncée.
+/// chaque touche, chaque unité UTF-16 et chaque bouton de la souris restés enfoncés, relâchés dans
+/// l'ordre inverse de leur enfoncement, touches et boutons mêlés, une touche avec le balayage et
+/// l'extension de son enfoncement. Un déplacement, un cran de molette et le mouvement nul
+/// n'enfoncent rien. Quand une Alt, gauche ou droite, est à relâcher, 0xE8, que Windows n'attribue
+/// à rien, est d'abord enfoncée puis relâchée : une Alt relâchée seule ouvrirait le mode menu de la
+/// fenêtre au premier plan. Cette frappe de 0xE8 relâche aussi 0xE8, si le début l'a laissée
+/// enfoncée.
 fn relachements(debut: &[Evenement], balayage: &mut dyn FnMut(u8) -> u16) -> Vec<Evenement> {
     let mut enfoncees: Vec<Evenement> = Vec::new();
     for e in debut {
@@ -236,13 +238,14 @@ fn relachements(debut: &[Evenement], balayage: &mut dyn FnMut(u8) -> u16) -> Vec
             }
             | Evenement::Unicode {
                 relachee: false, ..
-            } => enfoncees.push(*e),
-            Evenement::Touche { .. } | Evenement::Unicode { .. } => {
+            }
+            | Evenement::Bouton { relache: false, .. } => enfoncees.push(*e),
+            Evenement::Touche { .. } | Evenement::Unicode { .. } | Evenement::Bouton { .. } => {
                 if let Some(i) = enfoncees.iter().rposition(|x| meme_touche(x, e)) {
                     enfoncees.remove(i);
                 }
             }
-            Evenement::SourisNulle => {}
+            Evenement::SourisNulle | Evenement::Pointeur { .. } | Evenement::Molette { .. } => {}
         }
     }
     let mut lot = Vec::new();
@@ -257,17 +260,18 @@ fn relachements(debut: &[Evenement], balayage: &mut dyn FnMut(u8) -> u16) -> Vec
     lot
 }
 
-/// Vrai si `a` et `b` portent la même touche virtuelle, ou la même unité UTF-16, enfoncée ou
-/// relâchée.
+/// Vrai si `a` et `b` portent la même touche virtuelle, la même unité UTF-16 ou le même bouton de
+/// la souris, enfoncé ou relâché.
 fn meme_touche(a: &Evenement, b: &Evenement) -> bool {
     match (*a, *b) {
         (Evenement::Touche { vk: x, .. }, Evenement::Touche { vk: y, .. }) => x == y,
         (Evenement::Unicode { unite: x, .. }, Evenement::Unicode { unite: y, .. }) => x == y,
+        (Evenement::Bouton { droit: x, .. }, Evenement::Bouton { droit: y, .. }) => x == y,
         _ => false,
     }
 }
 
-/// L'événement `e`, relâché.
+/// L'événement `e`, relâché ; tel quel, un événement qui n'enfonce rien.
 fn relachee(e: Evenement) -> Evenement {
     match e {
         Evenement::Touche {
@@ -282,7 +286,11 @@ fn relachee(e: Evenement) -> Evenement {
             unite,
             relachee: true,
         },
-        Evenement::SourisNulle => Evenement::SourisNulle,
+        Evenement::Bouton { droit, .. } => Evenement::Bouton {
+            droit,
+            relache: true,
+        },
+        Evenement::SourisNulle | Evenement::Pointeur { .. } | Evenement::Molette { .. } => e,
     }
 }
 
@@ -784,6 +792,7 @@ mod tests {
     use crate::domaine::fenetre::essai::f;
     use crate::domaine::fenetre::essai::p;
     use crate::domaine::fenetre::essai::pp;
+    use crate::domaine::touches::CRAN;
     use crate::domaine::touches::NomTouche;
     use crate::domaine::touches::essai::touches;
     use std::collections::VecDeque;
@@ -1155,6 +1164,17 @@ mod tests {
             );
             assert!(aucun_geste(&b), "{s}");
         }
+    }
+    // Ctrl+F6 se juge avec les autres interdites, avant le nom inconnu qui la précède, et la
+    // commande ne lit aucune fenêtre.
+    #[test]
+    fn ctrl_f6_avant_l_inconnu() {
+        let mut b = FauxBureau::avec_appli();
+        assert_eq!(
+            x(&mut b, "touche --fenetre appli-essai Bidule Ctrl+F6"),
+            Issue::arret(Arret::Refus("touche interdite : Ctrl+F6".into()))
+        );
+        assert!(!appele(&b, |a| matches!(a, AppelFaux::Fenetres)));
     }
     #[test]
     fn fenetre_refusee_avant_le_verrou() {
@@ -2102,6 +2122,92 @@ mod tests {
             ))
         );
         assert_eq!(b.envois().len(), 2);
+    }
+    // Un bouton enfoncé dans le début inséré, et pas relâché, se relâche ; un bouton déjà relâché,
+    // un déplacement et un cran de molette ne relâchent rien. Touches et boutons mêlés se relâchent
+    // dans l'ordre inverse de leurs enfoncements.
+    #[test]
+    fn relachements_relachent_les_boutons() {
+        let debut = [
+            Evenement::Pointeur { x: 1, y: 2 },
+            Evenement::Bouton {
+                droit: false,
+                relache: false,
+            },
+        ];
+        assert_eq!(
+            relachements(&debut, &mut |_| 0),
+            vec![Evenement::Bouton {
+                droit: false,
+                relache: true
+            }]
+        );
+        let droit = [
+            Evenement::Bouton {
+                droit: true,
+                relache: false,
+            },
+            Evenement::Bouton {
+                droit: true,
+                relache: true,
+            },
+            Evenement::Molette { delta: -CRAN },
+        ];
+        assert!(relachements(&droit, &mut |_| 0).is_empty());
+        let meles = [
+            t(0xA2, 0x1D, false),
+            Evenement::Bouton {
+                droit: false,
+                relache: false,
+            },
+            Evenement::Bouton {
+                droit: true,
+                relache: true,
+            },
+            Evenement::SourisNulle,
+        ];
+        assert_eq!(
+            relachements(&meles, &mut |_| 0),
+            vec![
+                Evenement::Bouton {
+                    droit: false,
+                    relache: true
+                },
+                t(0xA2, 0x1D, true)
+            ]
+        );
+    }
+    // Un clic inséré en partie : le bouton que son début a enfoncé se relâche d'un seul envoi, et
+    // l'échec du système dit les deux insertions.
+    #[test]
+    fn un_clic_insere_en_partie_relache_son_bouton() {
+        let mut b = FauxBureau::avec_appli();
+        b.insertions = VecDeque::from([1]);
+        let lot = [
+            Evenement::Pointeur { x: 100, y: 200 },
+            Evenement::Bouton {
+                droit: false,
+                relache: false,
+            },
+            Evenement::Bouton {
+                droit: false,
+                relache: true,
+            },
+        ];
+        assert_eq!(
+            insertion_complete(&mut b, &lot, 2),
+            Err(Arret::Echec(
+                "échec du système : SendInput a inséré 2 événements sur 3 ; relâchement : 1 sur 1"
+                    .into()
+            ))
+        );
+        assert_eq!(
+            b.envois(),
+            vec![vec![Evenement::Bouton {
+                droit: false,
+                relache: true
+            }]]
+        );
     }
     // Pendant la frappe, un envoi que Windows n'insère pas du tout se juge au premier plan relu :
     // une fenêtre qui l'a pris fait sortir en 1, avec le compte des unités parties avant lui.

@@ -2,7 +2,7 @@
 
 - **Statut** : accepté le 2026-11-21
 - **Contexte amont** : [ADR-0002](0002-garde-fous-dans-le-code.md), qu'il remplace ; le plan maître du lot 1, `.claude/plans/lot1-l-outil-et-l-essai-de-pupitre.md`, décisions 5, 6 et 9 ; le plan de sa tranche 1, `.claude/plans/lot1-tranche1-le-socle-le-clavier-et-l-application-d-essai.md`, décisions 1, 3, 5, 8, 10, 11 et 13
-- **Amendé** le 2026-11-28 : tranche 2 du lot 1 — COM en MTA ; aucune valeur par le cache de l'automatisation ni par les motifs LegacyIAccessible et Text
+- **Amendé** le 2026-11-28 : tranche 2 du lot 1 — COM en MTA ; aucune valeur par le cache de l'automatisation ni par les motifs LegacyIAccessible et Text ; Ctrl+F6 interdite
 
 ## Contexte
 
@@ -245,13 +245,17 @@ C'est une limite, que seule une lecture avant chaque unité fermerait.
 **Les touches interdites** : la touche Windows et ses combinaisons, Ctrl+Alt+Suppr, Alt+Tab, et
 toute touche qui change de fenêtre, qui ferait sortir la frappe de la fenêtre retenue ; Alt+F4 reste
 permis. Sur les noms de touches que l'analyse connaît aujourd'hui, la règle prend cette forme : la
-touche Windows, dans tout morceau d'une combinaison, Alt+Tab, Alt+F6, qui passe d'une fenêtre à
-l'autre d'un même programme, Ctrl+Alt+Suppr, Alt ou Ctrl avec Echap, quels que soient les autres
-modificateurs. Ces touches se reconnaissent à l'analyse, sous toute casse et dans tout ordre, sur
-tous les arguments avant qu'aucun nom ne s'analyse : une touche inconnue, même placée avant, ne
-cache pas une interdite (1, « touche interdite : <touche> »). Cette liste n'épuise pas la règle :
-une tranche qui ajoute un nom de touche le juge contre elle, et une touche dont on apprend qu'elle
-change de fenêtre rejoint la liste, avec son test.
+touche Windows, dans tout morceau d'une combinaison, Alt+Tab, Alt+F6 ou Ctrl+F6, qui passent d'une
+fenêtre à l'autre d'un même programme, Ctrl+Alt+Suppr, Alt ou Ctrl avec Echap, quels que soient les
+autres modificateurs. Ces touches se reconnaissent à l'analyse, sous toute casse et dans tout
+ordre, sur tous les arguments avant qu'aucun nom ne s'analyse : une touche inconnue, même placée
+avant, ne cache pas une interdite (1, « touche interdite : <touche> »). Cette liste n'épuise pas la
+règle : une tranche qui ajoute un nom de touche le juge contre elle, et une touche dont on apprend
+qu'elle change de fenêtre rejoint la liste, avec son test, sauf `Ctrl+Tab`, permis pour les onglets
+d'un dialogue (Edouard, 28/11/2026), dont la limite est dite plus bas.
+
+`Ctrl+Tab` est permis pour les onglets d'un dialogue ; dans Excel, il change de classeur, et la
+garde du premier plan n'arrête que l'unité suivante. C'est une limite.
 
 Un raccourci global du poste échappe à cette liste : le raccourci d'un `.lnk` du Bureau ou du menu
 Démarrer, une touche que réserve `RegisterHotKey`, la saisie automatique globale d'un coffre. Il
@@ -360,7 +364,7 @@ Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
   relâchement est tenté, sans garantie.
 - Alt+F6 rejoint les touches interdites, quels que soient les autres modificateurs : il passe d'une
   fenêtre à l'autre d'un même programme, et la garde du premier plan n'arrête que l'unité qui le
-  suit. F6, Ctrl+F6 et Maj+F6 restent permis.
+  suit. F6 et Maj+F6 restent permis ; Ctrl+F6 rejoint les interdites à la tranche 2.
 - Les touches interdites se jugent sur tous les arguments de `touche` avant qu'aucun nom ne
   s'analyse : l'ordre des arguments ne change ni le code ni le message.
 - Trois limites, déclarées chacune à sa place : un raccourci global du poste prend la frappe avant
@@ -397,6 +401,13 @@ Précisé par le plan de la tranche 2 du lot 1, qu'Edouard a accepté le 28/11/2
   Text, qui la portent aussi : le contrôle statique refuse leurs noms dans `src/`, avec celui de la
   propriété de la valeur, tout identifiant de propriété ou de motif bâti sur un nombre et
   l'accesseur `CachedValue` (« Les valeurs secrètes ne sortent jamais »).
+- Ctrl+F6 rejoint les touches interdites, quels que soient les autres modificateurs et l'ordre,
+  jugée avant toute touche inconnue comme les autres interdites : comme Alt+F6, elle passe d'une
+  fenêtre à l'autre d'un même programme (Edouard, 28/11/2026). `Ctrl+Tab` reste permis, pour les
+  onglets d'un dialogue (Edouard, 28/11/2026), et fait exception à « une touche dont on apprend
+  qu'elle change de fenêtre rejoint la liste » : dans Excel, il change de classeur, et la garde du
+  premier plan n'arrête que l'unité suivante (« Les touches interdites »). `Ctrl+Alt+<lettre>`
+  reste admis (Edouard, 28/11/2026).
 
 ## Conséquences
 
@@ -432,6 +443,12 @@ Les règles et les tests qui les tiennent, nommés par leur chemin :
   `sources_respectent_les_regles` : un appel hors de `src/bureau/clavier.rs`, ou sans `OCTET_BAS`,
   en mot entier, dans la partie code de sa ligne ou de l'une des trois suivantes, ou un appel de
   `ToUnicode`, `ToAscii` ou `ToAsciiEx`, le fait échouer.
+- **Ctrl+F6 interdite** (« Les touches interdites ») : `src/domaine/touches.rs`,
+  `ctrl_f6_est_interdite`, `touches_interdites_sortent_en_1`,
+  `interdites_dans_tout_ordre_et_avant_l_inconnu` et `voisines_des_interdites_sont_permises` ;
+  `src/domaine/gestes.rs`, `ctrl_f6_avant_l_inconnu` : Ctrl+F6, sous toute casse, dans tout ordre
+  et avec tout autre modificateur, sort en 1 avant toute touche inconnue ; F6, Maj+F6, `Ctrl+Tab` et
+  `Ctrl+Alt+<lettre>` passent.
 
 ## Révision
 
