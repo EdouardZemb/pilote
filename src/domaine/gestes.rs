@@ -197,10 +197,15 @@ impl Suivi {
 /// inséré <k> événements sur <n> ». `SendInput` insère dans l'ordre : une insertion partielle a
 /// enfoncé, dans le début inséré du lot, des touches ou des boutons que la fin devait relâcher, et
 /// qui resteraient enfoncés pour tout le poste. Leurs relâchements (`relachements`) partent alors
-/// d'un seul envoi, sans garde du premier plan, puisqu'ils ne tapent rien, et le message dit
-/// combien Windows en a insérés : « ; relâchement : <m> sur <p> ». Le relâchement est tenté, sans
-/// garantie : ce qui a refusé la fin du lot, comme un bureau sécurisé, peut le refuser aussi. Quand
-/// le début inséré n'a rien laissé enfoncé, rien ne part, et le message s'arrête à l'envoi.
+/// d'un seul envoi, sans garde du premier plan, et le message dit combien Windows en a insérés :
+/// « ; relâchement : <m> sur <p> ». Une touche ou une unité relâchée ne tape rien. Un bouton
+/// relâché agit (il achève un clic, ouvre le menu contextuel), mais il tombe au point que
+/// l'enfoncement vient d'atteindre, que la garde de l'unité a jugé ; sans lui, le bouton resterait
+/// enfoncé pour tout le poste, et le premier geste de la personne glisserait. Un relâchement qui
+/// partirait vers une fenêtre venue entre-temps relève de la fenêtre résiduelle d'une unité
+/// (ADR-0005, « Les lots »). Le relâchement est tenté, sans garantie : ce qui a refusé la fin du
+/// lot, comme un bureau sécurisé, peut le refuser aussi. Quand le début inséré n'a rien laissé
+/// enfoncé, rien ne part, et le message s'arrête à l'envoi.
 fn insertion_complete(b: &mut dyn Bureau, lot: &[Evenement], inseres: u32) -> Result<(), Arret> {
     let k = usize::try_from(inseres).unwrap_or(usize::MAX);
     if k == lot.len() {
@@ -2125,7 +2130,9 @@ mod tests {
     }
     // Un bouton enfoncé dans le début inséré, et pas relâché, se relâche ; un bouton déjà relâché,
     // un déplacement et un cran de molette ne relâchent rien. Touches et boutons mêlés se relâchent
-    // dans l'ordre inverse de leurs enfoncements.
+    // dans l'ordre inverse de leurs enfoncements. Deux boutons restés enfoncés se relâchent chacun
+    // de son côté, le dernier enfoncé d'abord : un bouton droit relâché en gauche le laisserait
+    // enfoncé pour tout le poste.
     #[test]
     fn relachements_relachent_les_boutons() {
         let debut = [
@@ -2174,6 +2181,29 @@ mod tests {
                     relache: true
                 },
                 t(0xA2, 0x1D, true)
+            ]
+        );
+        let deux = [
+            Evenement::Bouton {
+                droit: false,
+                relache: false,
+            },
+            Evenement::Bouton {
+                droit: true,
+                relache: false,
+            },
+        ];
+        assert_eq!(
+            relachements(&deux, &mut |_| 0),
+            vec![
+                Evenement::Bouton {
+                    droit: true,
+                    relache: true
+                },
+                Evenement::Bouton {
+                    droit: false,
+                    relache: true
+                }
             ]
         );
     }

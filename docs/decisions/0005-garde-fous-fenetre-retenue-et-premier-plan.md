@@ -2,7 +2,7 @@
 
 - **Statut** : accepté le 2026-11-21
 - **Contexte amont** : [ADR-0002](0002-garde-fous-dans-le-code.md), qu'il remplace ; le plan maître du lot 1, `.claude/plans/lot1-l-outil-et-l-essai-de-pupitre.md`, décisions 5, 6 et 9 ; le plan de sa tranche 1, `.claude/plans/lot1-tranche1-le-socle-le-clavier-et-l-application-d-essai.md`, décisions 1, 3, 5, 8, 10, 11 et 13
-- **Amendé** le 2026-11-28 : tranche 2 du lot 1 — COM en MTA ; aucune valeur par le cache de l'automatisation ni par les motifs LegacyIAccessible et Text ; Ctrl+F6 interdite
+- **Amendé** le 2026-11-28 : tranche 2 du lot 1 — COM en MTA ; aucune valeur par le cache de l'automatisation ni par les motifs LegacyIAccessible et Text ; Ctrl+F6 interdite ; les boutons de la souris relâchés après un envoi inséré en partie
 
 ## Contexte
 
@@ -199,17 +199,26 @@ modificateurs enfoncés, la touche, les modificateurs relâchés) et un caractè
 disposition du clavier partent en un seul envoi : le premier plan se vérifie avant elle, jamais au
 milieu.
 
-Un envoi que Windows n'insère qu'en partie a enfoncé, dans son début, des touches que sa fin devait
-relâcher : `SendInput` insère dans l'ordre. Elles resteraient enfoncées pour tout le poste, les
-frappes de la personne deviendraient des raccourcis, et `pilote` se bloquerait lui-même sur « touche
-de modification enfoncée ». `pilote` tente donc de les relâcher, en un seul envoi sans garde du
-premier plan, puisque des relâchements ne tapent rien : les touches et les unités UTF-16 que le
-début inséré a laissées enfoncées, dans l'ordre inverse de leur enfoncement. Quand une Alt, gauche
-ou droite, en est, 0xE8 enfoncée puis relâchée les précède, pour qu'aucune Alt ne se relâche seule.
-Puis il sort en 3, « échec du système : SendInput a inséré <k> événements sur <n> ; relâchement :
-<m> sur <p> », ou sans la seconde moitié quand le début inséré n'a rien laissé enfoncé. Ce
-relâchement est tenté, sans garantie : ce qui a refusé la fin du lot, comme un bureau sécurisé, peut
-le refuser aussi.
+Un envoi que Windows n'insère qu'en partie a enfoncé, dans son début, des touches ou des boutons de
+la souris que sa fin devait relâcher : `SendInput` insère dans l'ordre. Ils resteraient enfoncés
+pour tout le poste : les frappes de la personne deviendraient des raccourcis, son premier geste à
+la souris glisserait, et `pilote` se bloquerait lui-même sur « touche de modification enfoncée ».
+`pilote` tente donc de les relâcher, en un seul envoi : les touches, les unités UTF-16 et les
+boutons de la souris que le début inséré a laissés enfoncés, dans l'ordre inverse de leur
+enfoncement, touches et boutons mêlés. Quand une Alt, gauche ou droite, en est,
+0xE8 enfoncée puis relâchée les précède, pour qu'aucune Alt ne se relâche seule. Puis il sort en
+3, « échec du système : SendInput a inséré <k> événements sur <n> ; relâchement : <m> sur <p> »,
+ou sans la seconde moitié quand le début inséré n'a rien laissé enfoncé. Ce relâchement est tenté,
+sans garantie : ce qui a refusé la fin du lot, comme un bureau sécurisé, peut le refuser aussi.
+
+Ce relâchement part sans garde du premier plan. Une touche ou une unité relâchée ne tape rien. Un
+bouton relâché, lui, agit : il achève un clic ou un glisser, choisit l'élément d'un menu ouvert, et
+le droit ouvre le menu contextuel ; il va à la fenêtre sous le pointeur, ou à celle qui tient la
+capture, et non au premier plan. Mais il tombe au point que l'enfoncement vient d'atteindre, que la
+garde de l'unité a jugé ; sans lui, le bouton resterait enfoncé pour tout le poste, et le premier
+geste de la personne glisserait. Un relâchement qui partirait vers une fenêtre venue entre-temps
+relève de la limite déjà déclarée : une unité peut encore partir vers une fenêtre qui vient de
+voler le premier plan, entre le dernier contrôle et l'envoi (« Les gestes et l'ordre des gardes »).
 
 **La cadence.** Après chaque unité, `pilote` attend 5 ms (`CADENCE`) avant de vérifier le premier
 plan pour la suivante. Sans elle, des milliers d'événements partiraient en une fraction de seconde,
@@ -408,6 +417,13 @@ Précisé par le plan de la tranche 2 du lot 1, qu'Edouard a accepté le 28/11/2
   qu'elle change de fenêtre rejoint la liste » : dans Excel, il change de classeur, et la garde du
   premier plan n'arrête que l'unité suivante (« Les touches interdites »). `Ctrl+Alt+<lettre>`
   reste admis (Edouard, 28/11/2026).
+- Un envoi inséré en partie relâche aussi les boutons de la souris que son début a laissés
+  enfoncés, dans l'ordre inverse, touches et boutons mêlés, chaque bouton de son côté, en un seul
+  envoi sans garde du premier plan. À la différence d'une touche, un bouton relâché agit (il achève
+  un clic, ouvre le menu contextuel) : il tombe pourtant au point que l'enfoncement vient
+  d'atteindre, que la garde de l'unité a jugé ; sans lui, le bouton resterait enfoncé pour tout le
+  poste, et le premier geste de la personne glisserait ; un relâchement qui partirait vers une
+  fenêtre venue entre-temps relève de la fenêtre résiduelle d'une unité (« Les lots »).
 
 ## Conséquences
 
@@ -449,6 +465,16 @@ Les règles et les tests qui les tiennent, nommés par leur chemin :
   `src/domaine/gestes.rs`, `ctrl_f6_avant_l_inconnu` : Ctrl+F6, sous toute casse, dans tout ordre
   et avec tout autre modificateur, sort en 1 avant toute touche inconnue ; F6, Maj+F6, `Ctrl+Tab` et
   `Ctrl+Alt+<lettre>` passent.
+- **Le relâchement d'un envoi inséré en partie** (« Les lots ») : `src/domaine/gestes.rs`,
+  `combinaison_inseree_en_partie_relache_dans_l_ordre_inverse`,
+  `alt_entourant_insere_en_partie_relache_puis_sort_en_3`,
+  `altgr_insere_en_partie_frappe_0xe8_avant_l_alt_droite`,
+  `unicode_insere_en_partie_relache_son_unite`, `relachement_insere_en_partie_sort_en_3`,
+  `relachements_relachent_les_boutons` et `un_clic_insere_en_partie_relache_son_bouton` : ce que le
+  début inséré a laissé enfoncé, touches, unités UTF-16 et boutons de la souris, se relâche d'un
+  seul envoi, sans lecture du premier plan, dans l'ordre inverse, chaque bouton de son côté, 0xE8
+  frappée avant une Alt ; rien ne part quand rien n'est resté enfoncé ; la commande sort en 3 en
+  disant les deux insertions.
 
 ## Révision
 
