@@ -2,6 +2,7 @@
 
 - **Statut** : accepté le 2026-11-21
 - **Contexte amont** : [ADR-0004](0004-interface-sortie-codes-et-selecteur.md), qu'il remplace ; le plan maître du lot 1, `.claude/plans/lot1-l-outil-et-l-essai-de-pupitre.md`, décisions 7, 8, 11 et 12, et ce que la décision 5 dit des candidates ; le plan de sa tranche 1, `.claude/plans/lot1-tranche1-le-socle-le-clavier-et-l-application-d-essai.md`, décisions 4, 6 et 7, et, pour la frappe par la disposition du clavier, 2 et 9
+- **Amendé** le 2026-11-28 : tranche 2 du lot 1 — un changement amende cet ADR en place ; une valeur entre guillemets dès qu'elle porte un caractère blanc d'Unicode resté tel quel après l'échappement
 
 ## Contexte
 
@@ -53,8 +54,9 @@ L'option 4.
 **Les échappements.** Dans un nom, `\` s'écrit `\\`, un retour à la ligne `\n`, un retour chariot
 `\r`, une tabulation `\t`, `>` s'écrit `\>`, et tout autre caractère de contrôle, U+2028 et U+2029
 compris, `\u{XXXX}`, en chiffres hexadécimaux majuscules, quatre au moins. Une valeur porte les
-mêmes échappements, et s'écrit entre guillemets si elle contient une espace ou un guillemet, ses
-guillemets en `\"` ; une valeur vide s'écrit `""`, une valeur absente n'a pas sa clé. Chaque
+mêmes échappements, et s'écrit entre guillemets si elle contient une espace — tout caractère blanc
+d'Unicode resté tel quel après l'échappement, U+00A0, U+2007 et U+202F compris — ou un guillemet,
+ses guillemets en `\"` ; une valeur vide s'écrit `""`, une valeur absente n'a pas sa clé. Chaque
 message échappe de même les noms, les titres, les chemins et les caractères qu'il cite, chaque titre
 entre chevrons. `--nom` et `--titre` reçoivent le texte brut, sans échappement.
 
@@ -302,6 +304,20 @@ Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
 - Limite connue : une écriture ratée sur la sortie standard ne change pas le code de sortie, et un
   `fenetres` peut sortir en 0 sans sa ligne : l'issue est jugée avant d'être écrite.
 
+### Ce que la tranche 2 précise ou change
+
+Précisé par le plan de la tranche 2 du lot 1, qu'Edouard a accepté le 28/11/2026, et pendant son
+exécution.
+
+- Un changement amende cet ADR en place, selon `docs/modele/documentation.md`, et non plus par un
+  nouvel ADR (« Conséquences »).
+- Une valeur s'écrit entre guillemets dès que son texte échappé porte un caractère blanc d'Unicode,
+  U+00A0, U+2007 et U+202F compris, et non plus la seule espace ASCII : la ligne d'un élément y fait
+  passer des textes que l'application pilotée choisit (`id`, `classe`, `valeur`, `raccourci`,
+  `acces`, `dans`), et `id=a<U+00A0>motdepasse=oui`, sans guillemets, se lirait comme une clé
+  forgée. La tabulation, le retour et les autres caractères que l'échappement écrit (`\t`, `\n`,
+  `\u{XXXX}`) ne changent pas de forme (« Les échappements »).
+
 ## Conséquences
 
 - La compétence décrit ce format, ces codes et ces messages ; un test du domaine garde chaque forme
@@ -309,7 +325,19 @@ Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
 - Une sous-commande pas encore livrée a déjà son usage, ses bornes et sa ligne au journal : la livrer
   ne change pas ce que la session écrit.
 - **Difficile à changer** : tout ce que les sessions lisent, le format des lignes, le sens des codes
-  et les messages. Un changement passe par un nouvel ADR et par la compétence, dans la même PR.
+  et les messages. Un changement amende cet ADR en place (`docs/modele/documentation.md`), avec la
+  compétence dans la même PR dès qu'elle existe.
+
+## Confirmation
+
+Les règles et les tests qui les tiennent, nommés par leur chemin :
+
+- **Une valeur entre guillemets dès qu'elle porte un blanc ou un guillemet** (« Les
+  échappements ») : `src/domaine/sortie.rs`, `valeur_entre_guillemets_si_blanc_d_unicode`,
+  `valeur_entre_guillemets_si_espace_ou_guillemet`, `valeur_vide_s_ecrit_guillemets` et
+  `valeur_echappe_ses_caracteres` : l'espace, U+00A0, U+2007, U+202F, U+3000 et le guillemet mettent
+  la valeur entre guillemets, ces blancs gardés tels quels ; une tabulation, écrite `\t`, et un
+  retour, écrit `\n`, n'en mettent pas ; vide, elle s'écrit `""`.
 
 ## Révision
 

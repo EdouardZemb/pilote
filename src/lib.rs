@@ -17,16 +17,21 @@ mod systeme;
 #[cfg(windows)]
 pub fn lancer() -> u8 {
     use std::io::Write;
-    use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
+    use windows::Win32::System::Com::COINIT_MULTITHREADED;
     use windows::Win32::System::Com::CoInitializeEx;
 
     std::panic::set_hook(Box::new(|_| {}));
     systeme::sensible_au_dpi();
-    // L'AUMID d'une fenêtre se lit par une interface COM, qui demande COM sur ce fil ; le résultat
-    // s'ignore, car S_FALSE et RPC_E_CHANGED_MODE disent COM déjà là, et un échec laisse l'AUMID à
-    // `None`, le sens sûr. Le processus finit sans `CoUninitialize`.
-    // SAFETY: aucun argument réservé ; un appel unique, sur le fil qui lit les fenêtres.
-    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    // COM en MTA sur ce fil (ADR-0005, « Ce que la tranche 2 précise ou change ») : le client de
+    // l'automatisation y vit sans fil d'interface, et une application figée ne bloque pas `pilote`
+    // sur une pompe de messages. Les AUMID se lisent à part, sur un fil neuf en STA
+    // (`bureau::fenetres`). Le résultat s'ignore : S_FALSE dit COM déjà initialisé en MTA sur ce
+    // fil ; RPC_E_CHANGED_MODE le dirait déjà en STA, ce qui ne peut arriver ici, rien
+    // n'initialisant COM avant cet appel ; tout autre échec fait échouer les appels COM qui
+    // suivent, qui rendent alors une erreur que le domaine juge. Le processus finit sans
+    // `CoUninitialize`.
+    // SAFETY: aucun argument réservé ; un appel unique, sur le fil qui exécute la commande.
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let issue = domaine::executer(&args, &mut bureau::BureauWindows::new());
     let mut sortie = std::io::stdout().lock();

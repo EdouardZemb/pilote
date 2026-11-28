@@ -1,5 +1,5 @@
 //! Les gardes que Windows tient : le verrou des gestes (`Local\pilote-gestes`), et les trois faits
-//! qui disent si le poste est verrouillé (décision 10).
+//! qui disent si le poste est verrouillé (ADR-0005, « Le poste verrouillé »).
 
 use super::Poignee;
 use super::jusqu_au_nul;

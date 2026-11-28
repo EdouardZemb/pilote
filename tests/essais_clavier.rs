@@ -2,7 +2,7 @@
 //! Windows de la CI : les accents, un caractère hors du plan de base et un CRLF, en UTF-16 ; AltGr
 //! et la touche `barre`, par la disposition française ; Tab ; les refus de `--comme-au-clavier` ;
 //! puis `pilote` appelé depuis PowerShell 5.1 et depuis Git Bash. Ils pilotent le bureau, et ne
-//! tournent jamais sur le poste (décision 13 du plan maître).
+//! tournent jamais sur le poste (`CLAUDE.md` : la CI seule les lance).
 
 #![cfg(windows)]
 

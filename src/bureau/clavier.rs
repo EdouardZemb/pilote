@@ -1,5 +1,6 @@
-//! Le clavier : l'envoi d'un lot (`SendInput`), la disposition du fil focalisé (décision 2), relue
-//! à chaque appel, les touches de modification enfoncées et Verr. Maj.
+//! Le clavier : l'envoi d'un lot (`SendInput`), touches et souris mêlées, la disposition du fil
+//! focalisé (ADR-0006, « Les touches et les textes à taper »), relue à chaque appel, les touches de
+//! modification enfoncées et Verr. Maj.
 
 use super::hwnd_de;
 use super::id_non_nul;
@@ -21,7 +22,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::KEYEVENTF_EXTENDEDKEY;
 use windows::Win32::UI::Input::KeyboardAndMouse::KEYEVENTF_KEYUP;
 use windows::Win32::UI::Input::KeyboardAndMouse::KEYEVENTF_UNICODE;
 use windows::Win32::UI::Input::KeyboardAndMouse::MAPVK_VK_TO_VSC_EX;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_ABSOLUTE;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_LEFTDOWN;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_LEFTUP;
 use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_MOVE;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_RIGHTDOWN;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_RIGHTUP;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_VIRTUALDESK;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_WHEEL;
 use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEINPUT;
 use windows::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyExW;
 use windows::Win32::UI::Input::KeyboardAndMouse::SendInput;
@@ -167,7 +175,9 @@ pub fn envoyer(lot: &[Evenement]) -> u32 {
 }
 
 /// L'`INPUT` d'un événement : une touche virtuelle, son balayage et ses drapeaux ; une unité
-/// UTF-16 (`KEYEVENTF_UNICODE`, sans touche virtuelle) ; ou un mouvement de souris nul.
+/// UTF-16 (`KEYEVENTF_UNICODE`, sans touche virtuelle) ; un mouvement de souris nul ; un
+/// déplacement absolu sur le bureau virtuel (`MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK`, les
+/// coordonnées normalisées de 0 à 65 535) ; un bouton enfoncé ou relâché ; ou un cran de molette.
 fn entree(e: &Evenement) -> INPUT {
     match *e {
         Evenement::Touche {
@@ -185,15 +195,40 @@ fn entree(e: &Evenement) -> INPUT {
             unite,
             KEYEVENTF_UNICODE | drapeau(relachee, KEYEVENTF_KEYUP),
         ),
-        Evenement::SourisNulle => INPUT {
-            r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 {
-                mi: MOUSEINPUT {
-                    dwFlags: MOUSEEVENTF_MOVE,
-                    ..Default::default()
-                },
+        Evenement::SourisNulle => souris(MOUSEINPUT {
+            dwFlags: MOUSEEVENTF_MOVE,
+            ..Default::default()
+        }),
+        Evenement::Pointeur { x, y } => souris(MOUSEINPUT {
+            dx: i32::from(x),
+            dy: i32::from(y),
+            dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+            ..Default::default()
+        }),
+        Evenement::Bouton { droit, relache } => souris(MOUSEINPUT {
+            dwFlags: match (droit, relache) {
+                (false, false) => MOUSEEVENTF_LEFTDOWN,
+                (false, true) => MOUSEEVENTF_LEFTUP,
+                (true, false) => MOUSEEVENTF_RIGHTDOWN,
+                (true, true) => MOUSEEVENTF_RIGHTUP,
             },
-        },
+            ..Default::default()
+        }),
+        // `mouseData` est un `u32` : un cran vers le bas, négatif, y passe en complément à deux,
+        // que Windows relit signé pour la molette.
+        Evenement::Molette { delta } => souris(MOUSEINPUT {
+            mouseData: delta as u32,
+            dwFlags: MOUSEEVENTF_WHEEL,
+            ..Default::default()
+        }),
+    }
+}
+
+/// Un `INPUT` de la souris.
+fn souris(mi: MOUSEINPUT) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 { mi },
     }
 }
 

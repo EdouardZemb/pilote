@@ -1,8 +1,8 @@
 //! Le module commun des essais de bout en bout : leurs dossiers et leurs profils jetables,
 //! l'application d'essai et ses copies, le teneur du verrou des gestes, `pilote` et les deux
 //! shells, et les lectures du bureau dont les essais jugent. Ces essais pilotent le bureau, et seule
-//! la CI les lance (décision 13 du plan maître) : chaque fonction publique, sauf `exiger_la_ci`
-//! elle-même, et chaque constructeur commencent par `exiger_la_ci`. Chaque processus lancé reçoit
+//! la CI les lance (`CLAUDE.md`) : chaque fonction publique, sauf `exiger_la_ci` elle-même, et
+//! chaque constructeur commencent par `exiger_la_ci`. Chaque processus lancé reçoit
 //! un profil jetable à lui. C'est le seul fichier d'essai qui lance un processus, ce que
 //! `tests/statique.rs` garde.
 
@@ -650,8 +650,8 @@ fn executer(mut commande: Command, entree: Option<&[u8]>) -> Sortie {
 /// Exige que la disposition du clavier de l'application soit la française, par cinq preuves, dans
 /// cet ordre, chacune avec sa panique : `pilote activer` sort en 0 ; le premier plan est à
 /// l'application ; une fenêtre y est focalisée ; elle est à `msedgewebview2.exe`, dont le fil donne
-/// la disposition (décision 2) ; et cette disposition est 0x040C040C, où `@` et `/` sont à leur
-/// place.
+/// la disposition (ADR-0006, « Les touches et les textes à taper ») ; et cette disposition est
+/// 0x040C040C, où `@` et `/` sont à leur place.
 ///
 /// La fenêtre focalisée passe dans la WebView2 un instant après l'activation : la troisième et la
 /// quatrième preuve se sondent, 2 s au plus. Chaque pas relit aussi le premier plan, qui doit

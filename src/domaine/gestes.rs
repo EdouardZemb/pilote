@@ -3,13 +3,14 @@
 //! vérifié avant chacune (ADR-0005, « Les gestes et l'ordre des gardes »). Tout se décide ici
 //! contre le trait `Bureau`.
 //!
-//! L'ordre : l'analyse (décision 5), qui ne lit aucune fenêtre ; le journal, qu'exige toute
-//! commande valide ; la fenêtre retenue, avec la liste de refus et la règle de KeePassXC
-//! (décision 3) ; le verrou des gestes ; le poste verrouillé (décision 10) ; le niveau d'intégrité
-//! (décision 1) ; les touches enfoncées ; Verr. Maj, pour `taper --comme-au-clavier` seulement
-//! (décision 9) ; l'activation (décision 8) ; le refus et la règle de KeePassXC rejugés sur W
-//! relue ; les touches enfoncées de nouveau ; le calcul de tous les lots ; puis, pour chaque unité,
-//! le premier plan accepté (décision 11), l'envoi et la cadence (décision 13). Un refus d'avant
+//! L'ordre, chaque section citée étant d'ADR-0005 : l'analyse, qui ne lit aucune fenêtre ; le
+//! journal, qu'exige toute commande valide ; la fenêtre retenue, avec la liste de refus et la règle
+//! de KeePassXC (« KeePassXC ») ; le verrou des gestes ; le poste verrouillé (« Le poste
+//! verrouillé ») ; le niveau d'intégrité (« Le niveau d'intégrité se juge par comparaison ») ; les
+//! touches enfoncées ; Verr. Maj, pour `taper --comme-au-clavier` seulement ; l'activation
+//! (« L'activation ») ; le refus et la règle de KeePassXC rejugés sur W relue ; les touches
+//! enfoncées de nouveau ; le calcul de tous les lots ; puis, pour chaque unité, le premier plan
+//! accepté (« Le premier plan accepté »), l'envoi et la cadence (« La cadence »). Un refus d'avant
 //! l'activation n'a rien restauré, rien demandé, rien envoyé.
 
 use crate::domaine::bureau::Bureau;
@@ -45,6 +46,7 @@ use crate::domaine::sortie::Arret;
 use crate::domaine::sortie::Code;
 use crate::domaine::sortie::Issue;
 use crate::domaine::sortie::echapper;
+use crate::domaine::sortie::echec;
 use crate::domaine::sortie::formater;
 use crate::domaine::texte::LECTURE_MAX;
 use crate::domaine::texte::Unite;
@@ -69,8 +71,8 @@ use std::panic::catch_unwind;
 pub const ATTENTE_DU_VERROU: Duree = Duree(5_000);
 
 /// L'attente après chaque unité frappée, avant de vérifier le premier plan pour la suivante
-/// (décision 13) : sans elle, des milliers d'événements resteraient en file et partiraient vers
-/// une fenêtre qui aurait volé le premier plan après le dernier contrôle.
+/// (ADR-0005, « La cadence ») : sans elle, des milliers d'événements resteraient en file et
+/// partiraient vers une fenêtre qui aurait volé le premier plan après le dernier contrôle.
 pub const CADENCE: Duree = Duree(5);
 
 /// Le pas des sondes de la restauration et du premier plan.
@@ -113,7 +115,7 @@ enum Travail {
         frappe: Option<Frappe>,
     },
     /// Une sous-commande que clap accepte et que la tranche ne livre pas, par son nom : une
-    /// commande valide, qui exige le journal avant de sortir en 64 (décision 4).
+    /// commande valide, qui exige le journal avant de sortir en 64 (ADR-0006, « L'analyse »).
     PasEncoreLivree(&'static str),
 }
 
@@ -194,12 +196,17 @@ impl Suivi {
 
 /// `Ok` si `SendInput` a inséré les `inseres` événements de `lot`, tous ; sinon 3, « SendInput a
 /// inséré <k> événements sur <n> ». `SendInput` insère dans l'ordre : une insertion partielle a
-/// enfoncé, dans le début inséré du lot, des touches que la fin devait relâcher, et qui resteraient
-/// enfoncées pour tout le poste. Leurs relâchements (`relachements`) partent alors d'un seul envoi,
-/// sans garde du premier plan, puisqu'ils ne tapent rien, et le message dit combien Windows en a
-/// insérés : « ; relâchement : <m> sur <p> ». Le relâchement est tenté, sans garantie : ce qui a
-/// refusé la fin du lot, comme un bureau sécurisé, peut le refuser aussi. Quand le début inséré
-/// n'a rien laissé enfoncé, rien ne part, et le message s'arrête à l'envoi.
+/// enfoncé, dans le début inséré du lot, des touches ou des boutons que la fin devait relâcher, et
+/// qui resteraient enfoncés pour tout le poste. Leurs relâchements (`relachements`) partent alors
+/// d'un seul envoi, sans garde du premier plan, et le message dit combien Windows en a insérés :
+/// « ; relâchement : <m> sur <p> ». Une touche ou une unité relâchée ne tape rien. Un bouton
+/// relâché agit (il achève un clic, ouvre le menu contextuel), mais il tombe au point que
+/// l'enfoncement vient d'atteindre, que la garde de l'unité a jugé ; sans lui, le bouton resterait
+/// enfoncé pour tout le poste, et le premier geste de la personne glisserait. Un relâchement qui
+/// partirait vers une fenêtre venue entre-temps relève de la fenêtre résiduelle d'une unité
+/// (ADR-0005, « Les lots »). Le relâchement est tenté, sans garantie : ce qui a refusé la fin du
+/// lot, comme un bureau sécurisé, peut le refuser aussi. Quand le début inséré n'a rien laissé
+/// enfoncé, rien ne part, et le message s'arrête à l'envoi.
 fn insertion_complete(b: &mut dyn Bureau, lot: &[Evenement], inseres: u32) -> Result<(), Arret> {
     let k = usize::try_from(inseres).unwrap_or(usize::MAX);
     if k == lot.len() {
@@ -221,11 +228,13 @@ fn insertion_complete(b: &mut dyn Bureau, lot: &[Evenement], inseres: u32) -> Re
 }
 
 /// Les relâchements de ce que `debut`, le début inséré d'un lot, a enfoncé sans le relâcher :
-/// chaque touche et chaque unité UTF-16 restées enfoncées, relâchées dans l'ordre inverse de leur
-/// enfoncement, une touche avec le balayage et l'extension de son enfoncement. Quand une Alt, gauche
-/// ou droite, est à relâcher, 0xE8, que Windows n'attribue à rien, est d'abord enfoncée puis
-/// relâchée : une Alt relâchée seule ouvrirait le mode menu de la fenêtre au premier plan. Cette
-/// frappe de 0xE8 relâche aussi 0xE8, si le début l'a laissée enfoncée.
+/// chaque touche, chaque unité UTF-16 et chaque bouton de la souris restés enfoncés, relâchés dans
+/// l'ordre inverse de leur enfoncement, touches et boutons mêlés, une touche avec le balayage et
+/// l'extension de son enfoncement. Un déplacement, un cran de molette et le mouvement nul
+/// n'enfoncent rien. Quand une Alt, gauche ou droite, est à relâcher, 0xE8, que Windows n'attribue
+/// à rien, est d'abord enfoncée puis relâchée : une Alt relâchée seule ouvrirait le mode menu de la
+/// fenêtre au premier plan. Cette frappe de 0xE8 relâche aussi 0xE8, si le début l'a laissée
+/// enfoncée.
 fn relachements(debut: &[Evenement], balayage: &mut dyn FnMut(u8) -> u16) -> Vec<Evenement> {
     let mut enfoncees: Vec<Evenement> = Vec::new();
     for e in debut {
@@ -235,13 +244,14 @@ fn relachements(debut: &[Evenement], balayage: &mut dyn FnMut(u8) -> u16) -> Vec
             }
             | Evenement::Unicode {
                 relachee: false, ..
-            } => enfoncees.push(*e),
-            Evenement::Touche { .. } | Evenement::Unicode { .. } => {
+            }
+            | Evenement::Bouton { relache: false, .. } => enfoncees.push(*e),
+            Evenement::Touche { .. } | Evenement::Unicode { .. } | Evenement::Bouton { .. } => {
                 if let Some(i) = enfoncees.iter().rposition(|x| meme_touche(x, e)) {
                     enfoncees.remove(i);
                 }
             }
-            Evenement::SourisNulle => {}
+            Evenement::SourisNulle | Evenement::Pointeur { .. } | Evenement::Molette { .. } => {}
         }
     }
     let mut lot = Vec::new();
@@ -256,17 +266,18 @@ fn relachements(debut: &[Evenement], balayage: &mut dyn FnMut(u8) -> u16) -> Vec
     lot
 }
 
-/// Vrai si `a` et `b` portent la même touche virtuelle, ou la même unité UTF-16, enfoncée ou
-/// relâchée.
+/// Vrai si `a` et `b` portent la même touche virtuelle, la même unité UTF-16 ou le même bouton de
+/// la souris, enfoncé ou relâché.
 fn meme_touche(a: &Evenement, b: &Evenement) -> bool {
     match (*a, *b) {
         (Evenement::Touche { vk: x, .. }, Evenement::Touche { vk: y, .. }) => x == y,
         (Evenement::Unicode { unite: x, .. }, Evenement::Unicode { unite: y, .. }) => x == y,
+        (Evenement::Bouton { droit: x, .. }, Evenement::Bouton { droit: y, .. }) => x == y,
         _ => false,
     }
 }
 
-/// L'événement `e`, relâché.
+/// L'événement `e`, relâché ; tel quel, un événement qui n'enfonce rien.
 fn relachee(e: Evenement) -> Evenement {
     match e {
         Evenement::Touche {
@@ -281,7 +292,11 @@ fn relachee(e: Evenement) -> Evenement {
             unite,
             relachee: true,
         },
-        Evenement::SourisNulle => Evenement::SourisNulle,
+        Evenement::Bouton { droit, .. } => Evenement::Bouton {
+            droit,
+            relache: true,
+        },
+        Evenement::SourisNulle | Evenement::Pointeur { .. } | Evenement::Molette { .. } => e,
     }
 }
 
@@ -310,8 +325,9 @@ pub fn executer(args: &[OsString], b: &mut dyn Bureau) -> Issue {
 /// commande valide, puis son travail : `fenetres`, un geste, ou le 64 d'une sous-commande pas
 /// encore livrée.
 fn derouler(args: &[OsString], s: &mut Suivi, b: &mut dyn Bureau) -> Issue {
-    // 1. L'analyse (décision 5) : clap, les touches de `touche`, le texte de `taper`. Rien n'y lit
-    // une fenêtre, et son refus garde son code, que le journal s'ouvre ou non.
+    // 1. L'analyse (ADR-0006, « L'analyse ») : clap, les touches de `touche`, le texte de
+    // `taper`. Rien n'y lit une fenêtre, et son refus garde son code, que le journal s'ouvre ou
+    // non.
     let travail = match analyser_le_travail(args, s, b) {
         Ok(travail) => travail,
         Err(issue) => return issue,
@@ -512,8 +528,9 @@ fn geste(
     Ok(Issue::fait(Vec::new()))
 }
 
-/// Le refus de KeePassXC (décision 3), pour `touche` et `taper` (`frappe`) : quand le processus de
-/// `w`, ou celui d'une de ses fenêtres enfants, est KeePassXC. `activer` vers lui reste permis.
+/// Le refus de KeePassXC (ADR-0005, « KeePassXC »), pour `touche` et `taper` (`frappe`) : quand le
+/// processus de `w`, ou celui d'une de ses fenêtres enfants, est KeePassXC. `activer` vers lui
+/// reste permis.
 fn refuser_keepassxc(frappe: bool, w: &FenetreLue, tous: &[Processus]) -> Result<(), Arret> {
     if frappe && keepassxc_dans(w, tous) {
         return Err(Arret::Refus(KEEPASSXC.into()));
@@ -521,17 +538,18 @@ fn refuser_keepassxc(frappe: bool, w: &FenetreLue, tous: &[Processus]) -> Result
     Ok(())
 }
 
-/// Vrai si le poste est verrouillé (décision 10) : le bureau d'entrée n'est pas `Default` ou ne se
-/// lit pas ; les drapeaux lus disent « verrouillé » ; l'état lu n'est pas « actif ». Des drapeaux
-/// inconnus ou illisibles, et un état illisible, ne verrouillent pas à eux seuls.
+/// Vrai si le poste est verrouillé (ADR-0005, « Le poste verrouillé ») : le bureau d'entrée n'est
+/// pas `Default` ou ne se lit pas ; les drapeaux lus disent « verrouillé » ; l'état lu n'est pas
+/// « actif ». Des drapeaux inconnus ou illisibles, et un état illisible, ne verrouillent pas à eux
+/// seuls.
 fn poste_verrouille(s: &EtatSession) -> bool {
     s.bureau_d_entree.as_deref() != Some(BUREAU_PAR_DEFAUT)
         || s.drapeaux == Some(WTS_VERROUILLE)
         || s.etat.is_some_and(|etat| etat != WTS_ACTIF)
 }
 
-/// Le niveau d'intégrité (décision 1) : refus si celui de P dépasse celui de `pilote`, ou si l'un
-/// des deux ne se lit pas.
+/// Le niveau d'intégrité (ADR-0005, « Le niveau d'intégrité se juge par comparaison ») : refus si
+/// celui de P dépasse celui de `pilote`, ou si l'un des deux ne se lit pas.
 fn juger_le_niveau(r: &Retenue, b: &mut dyn Bureau) -> Result<(), Arret> {
     let cible = b.niveau_integrite(Some(r.processus.pid));
     let pilote = b.niveau_integrite(None);
@@ -551,16 +569,16 @@ fn exiger_les_modificateurs_relaches(b: &mut dyn Bureau) -> Result<(), Arret> {
     }
 }
 
-/// L'activation de W (décision 8), qui rend le premier plan accepté. Une fenêtre réduite se
-/// restaure, puis se sonde jusqu'à ne plus l'être : la restauration part sans attendre la fenêtre
-/// (`ShowWindowAsync`), dont le retour ne dit pas qu'elle est faite. Rien de plus si le premier
-/// plan est accepté. Sinon, un mouvement de souris nul, la demande, une sonde ; puis, en un seul
-/// envoi, Alt gauche entourant 0xE8, que Windows n'attribue à rien, sans jamais frapper Alt seule,
-/// qui ouvrirait le mode menu d'une fenêtre Win32 ; une sonde du relâchement des modificateurs,
-/// refus sans demande s'ils restent enfoncés ; la demande, une sonde ; sinon, refus. Un de ces deux
-/// envois que `SendInput` n'insère pas du tout ne fait pas sortir : l'activation suit son cours et
-/// se juge au premier plan relu ; inséré en partie, il sort en 3, après le relâchement tenté
-/// (`Suivi::envoyer_pour_activer`).
+/// L'activation de W (ADR-0005, « L'activation »), qui rend le premier plan accepté. Une fenêtre
+/// réduite se restaure, puis se sonde jusqu'à ne plus l'être : la restauration part sans attendre
+/// la fenêtre (`ShowWindowAsync`), dont le retour ne dit pas qu'elle est faite. Rien de plus si le
+/// premier plan est accepté. Sinon, un mouvement de souris nul, la demande, une sonde ; puis, en un
+/// seul envoi, Alt gauche entourant 0xE8, que Windows n'attribue à rien, sans jamais frapper Alt
+/// seule, qui ouvrirait le mode menu d'une fenêtre Win32 ; une sonde du relâchement des
+/// modificateurs, refus sans demande s'ils restent enfoncés ; la demande, une sonde ; sinon, refus.
+/// Un de ces deux envois que `SendInput` n'insère pas du tout ne fait pas sortir : l'activation
+/// suit son cours et se juge au premier plan relu ; inséré en partie, il sort en 3, après le
+/// relâchement tenté (`Suivi::envoyer_pour_activer`).
 fn activer(r: &Retenue, s: &mut Suivi, b: &mut dyn Bureau) -> Result<PremierPlan, Arret> {
     let w = r.fenetre.id;
     let refus = || Arret::Refus(PREMIER_PLAN_REFUSE.into());
@@ -596,11 +614,11 @@ fn activer(r: &Retenue, s: &mut Suivi, b: &mut dyn Bureau) -> Result<PremierPlan
     attendre_le_premier_plan(r, b)?.ok_or_else(refus)
 }
 
-/// Le premier plan, s'il est accepté pour la retenue `r` (décision 11), jugé sur l'instantané des
-/// processus relu juste après lui. L'instantané prend du temps sur le vrai poste : le premier plan
-/// se relit après lui, et doit être le même qu'avant. C'est cette dernière lecture qui se juge et
-/// se rend, pour que l'envoi qui suit parte juste après elle : une fenêtre qui prend le premier
-/// plan pendant l'instantané ne reçoit rien.
+/// Le premier plan, s'il est accepté pour la retenue `r` (ADR-0005, « Le premier plan accepté »),
+/// jugé sur l'instantané des processus relu juste après lui. L'instantané prend du temps sur le
+/// vrai poste : le premier plan se relit après lui, et doit être le même qu'avant. C'est cette
+/// dernière lecture qui se juge et se rend, pour que l'envoi qui suit parte juste après elle : une
+/// fenêtre qui prend le premier plan pendant l'instantané ne reçoit rien.
 fn premier_plan_accepte(r: &Retenue, b: &mut dyn Bureau) -> Result<Option<PremierPlan>, Arret> {
     let avant = b.premier_plan();
     let tous = b.processus().map_err(echec_systeme)?;
@@ -754,11 +772,6 @@ fn journaliser(sous: &'static str, code: Code, s: &Suivi, b: &mut dyn Bureau) ->
     b.ajouter_au_journal(&ligne(&appel)).is_ok()
 }
 
-/// L'échec du système : « échec du système : <quoi> ».
-fn echec(quoi: &str) -> Arret {
-    Arret::Echec(format!("échec du système : {quoi}"))
-}
-
 /// L'échec d'une lecture ou d'une action du système, son texte échappé : il tient en une ligne.
 fn echec_systeme(e: ErreurSysteme) -> Arret {
     echec(&echapper(&e.0))
@@ -780,6 +793,7 @@ mod tests {
     use crate::domaine::fenetre::essai::f;
     use crate::domaine::fenetre::essai::p;
     use crate::domaine::fenetre::essai::pp;
+    use crate::domaine::touches::CRAN;
     use crate::domaine::touches::NomTouche;
     use crate::domaine::touches::essai::touches;
     use std::collections::VecDeque;
@@ -1152,6 +1166,17 @@ mod tests {
             assert!(aucun_geste(&b), "{s}");
         }
     }
+    // Ctrl+F6 se juge avec les autres interdites, avant le nom inconnu qui la précède, et la
+    // commande ne lit aucune fenêtre.
+    #[test]
+    fn ctrl_f6_avant_l_inconnu() {
+        let mut b = FauxBureau::avec_appli();
+        assert_eq!(
+            x(&mut b, "touche --fenetre appli-essai Bidule Ctrl+F6"),
+            Issue::arret(Arret::Refus("touche interdite : Ctrl+F6".into()))
+        );
+        assert!(!appele(&b, |a| matches!(a, AppelFaux::Fenetres)));
+    }
     #[test]
     fn fenetre_refusee_avant_le_verrou() {
         let mut b = FauxBureau::avec_appli();
@@ -1448,7 +1473,7 @@ mod tests {
         );
     }
     // `fenetres` lit les fenêtres, puis l'instantané des processus, puis le premier plan, et rien
-    // d'autre ; ses lignes sont celles de la décision 7.
+    // d'autre ; ses lignes sont celles d'ADR-0006, « Les sorties de la tranche 1 ».
     #[test]
     fn fenetres_ecrit_ses_lignes_sans_les_gardes() {
         let mut b = FauxBureau::avec_appli();
@@ -2098,6 +2123,117 @@ mod tests {
             ))
         );
         assert_eq!(b.envois().len(), 2);
+    }
+    // Un bouton enfoncé dans le début inséré, et pas relâché, se relâche ; un bouton déjà relâché,
+    // un déplacement et un cran de molette ne relâchent rien. Touches et boutons mêlés se relâchent
+    // dans l'ordre inverse de leurs enfoncements. Deux boutons restés enfoncés se relâchent chacun
+    // de son côté, le dernier enfoncé d'abord : un bouton droit relâché en gauche le laisserait
+    // enfoncé pour tout le poste.
+    #[test]
+    fn relachements_relachent_les_boutons() {
+        let debut = [
+            Evenement::Pointeur { x: 1, y: 2 },
+            Evenement::Bouton {
+                droit: false,
+                relache: false,
+            },
+        ];
+        assert_eq!(
+            relachements(&debut, &mut |_| 0),
+            vec![Evenement::Bouton {
+                droit: false,
+                relache: true
+            }]
+        );
+        let droit = [
+            Evenement::Bouton {
+                droit: true,
+                relache: false,
+            },
+            Evenement::Bouton {
+                droit: true,
+                relache: true,
+            },
+            Evenement::Molette { delta: -CRAN },
+        ];
+        assert!(relachements(&droit, &mut |_| 0).is_empty());
+        let meles = [
+            t(0xA2, 0x1D, false),
+            Evenement::Bouton {
+                droit: false,
+                relache: false,
+            },
+            Evenement::Bouton {
+                droit: true,
+                relache: true,
+            },
+            Evenement::SourisNulle,
+        ];
+        assert_eq!(
+            relachements(&meles, &mut |_| 0),
+            vec![
+                Evenement::Bouton {
+                    droit: false,
+                    relache: true
+                },
+                t(0xA2, 0x1D, true)
+            ]
+        );
+        let deux = [
+            Evenement::Bouton {
+                droit: false,
+                relache: false,
+            },
+            Evenement::Bouton {
+                droit: true,
+                relache: false,
+            },
+        ];
+        assert_eq!(
+            relachements(&deux, &mut |_| 0),
+            vec![
+                Evenement::Bouton {
+                    droit: true,
+                    relache: true
+                },
+                Evenement::Bouton {
+                    droit: false,
+                    relache: true
+                }
+            ]
+        );
+    }
+    // Un clic inséré en partie : le bouton que son début a enfoncé se relâche d'un seul envoi, et
+    // l'échec du système dit les deux insertions.
+    #[test]
+    fn un_clic_insere_en_partie_relache_son_bouton() {
+        let mut b = FauxBureau::avec_appli();
+        b.insertions = VecDeque::from([1]);
+        let lot = [
+            Evenement::Pointeur { x: 100, y: 200 },
+            Evenement::Bouton {
+                droit: false,
+                relache: false,
+            },
+            Evenement::Bouton {
+                droit: false,
+                relache: true,
+            },
+        ];
+        assert_eq!(
+            insertion_complete(&mut b, &lot, 2),
+            Err(Arret::Echec(
+                "échec du système : SendInput a inséré 2 événements sur 3 ; relâchement : 1 sur 1"
+                    .into()
+            ))
+        );
+        assert_eq!(
+            b.envois(),
+            vec![vec![Evenement::Bouton {
+                droit: false,
+                relache: true
+            }]]
+        );
     }
     // Pendant la frappe, un envoi que Windows n'insère pas du tout se juge au premier plan relu :
     // une fenêtre qui l'a pris fait sortir en 1, avec le compte des unités parties avant lui.

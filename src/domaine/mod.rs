@@ -11,6 +11,7 @@
 
 pub mod bureau;
 pub mod cli;
+pub mod element;
 #[cfg(test)]
 pub mod faux;
 pub mod fenetre;

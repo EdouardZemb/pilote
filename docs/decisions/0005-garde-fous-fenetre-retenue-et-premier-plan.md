@@ -2,6 +2,7 @@
 
 - **Statut** : accepté le 2026-11-21
 - **Contexte amont** : [ADR-0002](0002-garde-fous-dans-le-code.md), qu'il remplace ; le plan maître du lot 1, `.claude/plans/lot1-l-outil-et-l-essai-de-pupitre.md`, décisions 5, 6 et 9 ; le plan de sa tranche 1, `.claude/plans/lot1-tranche1-le-socle-le-clavier-et-l-application-d-essai.md`, décisions 1, 3, 5, 8, 10, 11 et 13
+- **Amendé** le 2026-11-28 : tranche 2 du lot 1 — COM en MTA ; aucune valeur par le cache de l'automatisation ni par les motifs LegacyIAccessible et Text ; Ctrl+F6 interdite ; les boutons de la souris relâchés après un envoi inséré en partie
 
 ## Contexte
 
@@ -102,6 +103,14 @@ Un élément que l'automatisation marque comme mot de passe (`IsPassword`) ne re
 `valeur`, qui refuse (1), ni par `arbre`, ni par `trouver`, qui écrivent `motdepasse=oui` à la place,
 quelle que soit l'application.
 
+Aucune valeur ne passe par le cache de l'automatisation, ni par les motifs LegacyIAccessible et
+Text, qui la portent aussi : le contrôle statique refuse dans `src/` leurs noms et celui de la
+propriété de la valeur, tout identifiant de propriété ou de motif bâti sur un nombre
+(`UIA_PROPERTY_ID(`, `UIA_PATTERN_ID(`), qui les nommerait sans leur nom, et l'accesseur
+`CachedValue` ; une valeur se lit en courant (`CurrentValue`). Une tranche qui aurait besoin du
+motif Text ne lève la règle qu'avec un marquage relu juste avant (`CurrentIsPassword`), jugé dans
+le domaine et testé.
+
 ### KeePassXC
 
 - **La règle.** `capture` refuse ses fenêtres. Quand P, ou le processus d'une fenêtre enfant de W,
@@ -190,17 +199,26 @@ modificateurs enfoncés, la touche, les modificateurs relâchés) et un caractè
 disposition du clavier partent en un seul envoi : le premier plan se vérifie avant elle, jamais au
 milieu.
 
-Un envoi que Windows n'insère qu'en partie a enfoncé, dans son début, des touches que sa fin devait
-relâcher : `SendInput` insère dans l'ordre. Elles resteraient enfoncées pour tout le poste, les
-frappes de la personne deviendraient des raccourcis, et `pilote` se bloquerait lui-même sur « touche
-de modification enfoncée ». `pilote` tente donc de les relâcher, en un seul envoi sans garde du
-premier plan, puisque des relâchements ne tapent rien : les touches et les unités UTF-16 que le
-début inséré a laissées enfoncées, dans l'ordre inverse de leur enfoncement. Quand une Alt, gauche
-ou droite, en est, 0xE8 enfoncée puis relâchée les précède, pour qu'aucune Alt ne se relâche seule.
-Puis il sort en 3, « échec du système : SendInput a inséré <k> événements sur <n> ; relâchement :
-<m> sur <p> », ou sans la seconde moitié quand le début inséré n'a rien laissé enfoncé. Ce
-relâchement est tenté, sans garantie : ce qui a refusé la fin du lot, comme un bureau sécurisé, peut
-le refuser aussi.
+Un envoi que Windows n'insère qu'en partie a enfoncé, dans son début, des touches ou des boutons de
+la souris que sa fin devait relâcher : `SendInput` insère dans l'ordre. Ils resteraient enfoncés
+pour tout le poste : les frappes de la personne deviendraient des raccourcis, son premier geste à
+la souris glisserait, et `pilote` se bloquerait lui-même sur « touche de modification enfoncée ».
+`pilote` tente donc de les relâcher, en un seul envoi : les touches, les unités UTF-16 et les
+boutons de la souris que le début inséré a laissés enfoncés, dans l'ordre inverse de leur
+enfoncement, touches et boutons mêlés. Quand une Alt, gauche ou droite, en est,
+0xE8 enfoncée puis relâchée les précède, pour qu'aucune Alt ne se relâche seule. Puis il sort en
+3, « échec du système : SendInput a inséré <k> événements sur <n> ; relâchement : <m> sur <p> »,
+ou sans la seconde moitié quand le début inséré n'a rien laissé enfoncé. Ce relâchement est tenté,
+sans garantie : ce qui a refusé la fin du lot, comme un bureau sécurisé, peut le refuser aussi.
+
+Ce relâchement part sans garde du premier plan. Une touche ou une unité relâchée ne tape rien. Un
+bouton relâché, lui, agit : il achève un clic ou un glisser, choisit l'élément d'un menu ouvert, et
+le droit ouvre le menu contextuel ; il va à la fenêtre sous le pointeur, ou à celle qui tient la
+capture, et non au premier plan. Mais il tombe au point que l'enfoncement vient d'atteindre, que la
+garde de l'unité a jugé ; sans lui, le bouton resterait enfoncé pour tout le poste, et le premier
+geste de la personne glisserait. Un relâchement qui partirait vers une fenêtre venue entre-temps
+relève de la limite déjà déclarée : une unité peut encore partir vers une fenêtre qui vient de
+voler le premier plan, entre le dernier contrôle et l'envoi (« Les gestes et l'ordre des gardes »).
 
 **La cadence.** Après chaque unité, `pilote` attend 5 ms (`CADENCE`) avant de vérifier le premier
 plan pour la suivante. Sans elle, des milliers d'événements partiraient en une fraction de seconde,
@@ -236,13 +254,17 @@ C'est une limite, que seule une lecture avant chaque unité fermerait.
 **Les touches interdites** : la touche Windows et ses combinaisons, Ctrl+Alt+Suppr, Alt+Tab, et
 toute touche qui change de fenêtre, qui ferait sortir la frappe de la fenêtre retenue ; Alt+F4 reste
 permis. Sur les noms de touches que l'analyse connaît aujourd'hui, la règle prend cette forme : la
-touche Windows, dans tout morceau d'une combinaison, Alt+Tab, Alt+F6, qui passe d'une fenêtre à
-l'autre d'un même programme, Ctrl+Alt+Suppr, Alt ou Ctrl avec Echap, quels que soient les autres
-modificateurs. Ces touches se reconnaissent à l'analyse, sous toute casse et dans tout ordre, sur
-tous les arguments avant qu'aucun nom ne s'analyse : une touche inconnue, même placée avant, ne
-cache pas une interdite (1, « touche interdite : <touche> »). Cette liste n'épuise pas la règle :
-une tranche qui ajoute un nom de touche le juge contre elle, et une touche dont on apprend qu'elle
-change de fenêtre rejoint la liste, avec son test.
+touche Windows, dans tout morceau d'une combinaison, Alt+Tab, Alt+F6 ou Ctrl+F6, qui passent d'une
+fenêtre à l'autre d'un même programme, Ctrl+Alt+Suppr, Alt ou Ctrl avec Echap, quels que soient les
+autres modificateurs. Ces touches se reconnaissent à l'analyse, sous toute casse et dans tout
+ordre, sur tous les arguments avant qu'aucun nom ne s'analyse : une touche inconnue, même placée
+avant, ne cache pas une interdite (1, « touche interdite : <touche> »). Cette liste n'épuise pas la
+règle : une tranche qui ajoute un nom de touche le juge contre elle, et une touche dont on apprend
+qu'elle change de fenêtre rejoint la liste, avec son test, sauf `Ctrl+Tab`, permis pour les onglets
+d'un dialogue (Edouard, 28/11/2026), dont la limite est dite plus bas.
+
+`Ctrl+Tab` est permis pour les onglets d'un dialogue ; dans Excel, il change de classeur, et la
+garde du premier plan n'arrête que l'unité suivante. C'est une limite.
 
 Un raccourci global du poste échappe à cette liste : le raccourci d'un `.lnk` du Bureau ou du menu
 Démarrer, une touche que réserve `RegisterHotKey`, la saisie automatique globale d'un coffre. Il
@@ -321,9 +343,12 @@ Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
   fenêtre candidate.
 - `ToUnicodeEx` reçoit l'octet bas du balayage : le préfixe 0xE0 d'une touche étendue pose le bit
   15, que `ToUnicodeEx` lit comme « touche relâchée », et rien ne serait produit.
-- `CoInitializeEx(COINIT_APARTMENTTHREADED)` s'appelle une fois dans `lancer`, pour lire l'AUMID,
-  qui se lit par une interface COM : sans COM, aucun AUMID ne se lirait, et le cadre réduit d'une
-  autre application du Store serait refusé à tort.
+- L'AUMID se lit par une interface COM : sans COM, aucun AUMID ne se lirait, et le cadre réduit
+  d'une autre application du Store serait refusé à tort. Depuis la tranche 2, `lancer` initialise
+  COM en MTA (`CoInitializeEx(COINIT_MULTITHREADED)`), et les AUMID d'une énumération se lisent
+  ensemble sur un seul fil neuf, initialisé en STA (`COINIT_APARTMENTTHREADED`), un fil par
+  énumération ; limite, aucun essai n'éprouve en CI la lecture de l'AUMID d'une autre application
+  du Store (« Ce que la tranche 2 précise ou change »).
 - Le premier plan se relit après l'instantané des processus, et doit égaler celui d'avant
   (`premier_plan_accepte`) : l'instantané prend quelques millisecondes, pendant lesquelles une autre
   fenêtre peut prendre le premier plan.
@@ -348,7 +373,7 @@ Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
   relâchement est tenté, sans garantie.
 - Alt+F6 rejoint les touches interdites, quels que soient les autres modificateurs : il passe d'une
   fenêtre à l'autre d'un même programme, et la garde du premier plan n'arrête que l'unité qui le
-  suit. F6, Ctrl+F6 et Maj+F6 restent permis.
+  suit. F6 et Maj+F6 restent permis ; Ctrl+F6 rejoint les interdites à la tranche 2.
 - Les touches interdites se jugent sur tous les arguments de `touche` avant qu'aucun nom ne
   s'analyse : l'ordre des arguments ne change ni le code ni le message.
 - Trois limites, déclarées chacune à sa place : un raccourci global du poste prend la frappe avant
@@ -361,6 +386,45 @@ Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
   un `taper` de 10 000 caractères dure donc de l'ordre de 100 s : les 5 ms de `CADENCE` ne sont
   qu'un plancher, auquel s'ajoute la garde du premier plan relue avant chaque unité.
 
+### Ce que la tranche 2 précise ou change
+
+Précisé par le plan de la tranche 2 du lot 1, qu'Edouard a accepté le 28/11/2026.
+
+- COM s'initialise en MTA dans `lancer` (`CoInitializeEx(COINIT_MULTITHREADED)`), et non plus en
+  STA : le client de l'automatisation y vit sans fil d'interface, et une application figée ne
+  bloque pas `pilote` sur une pompe de messages.
+- Les AUMID d'une énumération se lisent ensemble sur un seul fil neuf, initialisé en STA
+  (`COINIT_APARTMENTTHREADED`), puis `CoUninitialize` et `join` : leur lecture ne dépend pas du
+  modèle du fil principal, que la documentation de `SHGetPropertyStoreForWindow` ne dit pas, et
+  c'est celle des essais, qui lisent l'AUMID dans un processus en STA, si bien que l'essai des
+  Paramètres dit ce que lit `pilote`. Un fil par énumération, et non par fenêtre, garde le coût
+  d'une commande. Un fil qui ne naît pas, qui panique, ou dont l'initialisation en STA échoue,
+  rend `None` pour chaque fenêtre, sans aucune lecture (sans STA, il lirait sous le MTA implicite
+  du processus) et sans que la panique sorte du fil, et une lecture ratée `None` pour la sienne :
+  le domaine refuse le cadre sans AUMID dont aucun enfant d'un autre processus ne se lit (« La
+  liste de refus »).
+- Limite : faute d'une autre application du Store sur le runner, aucun essai ne prouve qu'un AUMID
+  d'une autre application se lit ; un AUMID perdu ne refuserait à tort que le cadre réduit d'une
+  telle application.
+- Aucune valeur ne passe par le cache de l'automatisation, ni par les motifs LegacyIAccessible et
+  Text, qui la portent aussi : le contrôle statique refuse leurs noms dans `src/`, avec celui de la
+  propriété de la valeur, tout identifiant de propriété ou de motif bâti sur un nombre et
+  l'accesseur `CachedValue` (« Les valeurs secrètes ne sortent jamais »).
+- Ctrl+F6 rejoint les touches interdites, quels que soient les autres modificateurs et l'ordre,
+  jugée avant toute touche inconnue comme les autres interdites : comme Alt+F6, elle passe d'une
+  fenêtre à l'autre d'un même programme (Edouard, 28/11/2026). `Ctrl+Tab` reste permis, pour les
+  onglets d'un dialogue (Edouard, 28/11/2026), et fait exception à « une touche dont on apprend
+  qu'elle change de fenêtre rejoint la liste » : dans Excel, il change de classeur, et la garde du
+  premier plan n'arrête que l'unité suivante (« Les touches interdites »). `Ctrl+Alt+<lettre>`
+  reste admis (Edouard, 28/11/2026).
+- Un envoi inséré en partie relâche aussi les boutons de la souris que son début a laissés
+  enfoncés, dans l'ordre inverse, touches et boutons mêlés, chaque bouton de son côté, en un seul
+  envoi sans garde du premier plan. À la différence d'une touche, un bouton relâché agit (il achève
+  un clic, ouvre le menu contextuel) : il tombe pourtant au point que l'enfoncement vient
+  d'atteindre, que la garde de l'unité a jugé ; sans lui, le bouton resterait enfoncé pour tout le
+  poste, et le premier geste de la personne glisserait ; un relâchement qui partirait vers une
+  fenêtre venue entre-temps relève de la fenêtre résiduelle d'une unité (« Les lots »).
+
 ## Conséquences
 
 - Changer un refus demande une PR, relue, avec ses tests.
@@ -372,6 +436,45 @@ Précisé pendant l'exécution de la tranche, les 21 et 22/11/2026.
 - Un `taper` coûte de l'ordre de 10 ms par unité : une session le compte dans ses attentes.
 - **Difficile à changer** : rien de technique ; c'est une frontière de sécurité, qui ne s'élargit
   qu'avec l'accord d'Edouard.
+
+## Confirmation
+
+Les règles et les tests qui les tiennent, nommés par leur chemin :
+
+- **Aucun `SetValue`** : `tests/statique.rs`, `refuse_set_value_partout` et
+  `sources_respectent_les_regles`.
+- **Aucune valeur par le cache de l'automatisation, ni par les motifs LegacyIAccessible et Text**
+  (« Les valeurs secrètes ne sortent jamais ») : `tests/statique.rs`,
+  `refuse_le_jeton_et_les_chemins_de_la_valeur_dans_src`,
+  `chaque_mot_du_jeton_et_des_valeurs_a_sa_plantation`,
+  `chaque_detour_de_la_valeur_a_sa_plantation` et `sources_respectent_les_regles` : dans `src/`,
+  un nom de ces motifs ou de la propriété de la valeur, un identifiant bâti sur un nombre
+  (`UIA_PROPERTY_ID(`, `UIA_PATTERN_ID(`) ou l'accesseur `CachedValue` le fait échouer ; la
+  relecture de la couche Windows ferme ce que la recherche dans le texte laisse passer (un alias,
+  un `transmute`).
+- **`ToUnicodeEx` reçoit l'octet bas du balayage** (« Ce qui précise ou change le plan de la
+  tranche ») : `tests/statique.rs`, `refuse_to_unicode_ex_hors_du_clavier`,
+  `refuse_to_unicode_ex_sans_l_octet_bas`, `to_unicode_ex_compte_sa_ligne_et_ses_trois_suivantes`,
+  `octet_bas_compte_en_mot_entier_dans_le_code`, `refuse_les_autres_traductions_d_une_touche` et
+  `sources_respectent_les_regles` : un appel hors de `src/bureau/clavier.rs`, ou sans `OCTET_BAS`,
+  en mot entier, dans la partie code de sa ligne ou de l'une des trois suivantes, ou un appel de
+  `ToUnicode`, `ToAscii` ou `ToAsciiEx`, le fait échouer.
+- **Ctrl+F6 interdite** (« Les touches interdites ») : `src/domaine/touches.rs`,
+  `ctrl_f6_est_interdite`, `touches_interdites_sortent_en_1`,
+  `interdites_dans_tout_ordre_et_avant_l_inconnu` et `voisines_des_interdites_sont_permises` ;
+  `src/domaine/gestes.rs`, `ctrl_f6_avant_l_inconnu` : Ctrl+F6, sous toute casse, dans tout ordre
+  et avec tout autre modificateur, sort en 1 avant toute touche inconnue ; F6, Maj+F6, `Ctrl+Tab` et
+  `Ctrl+Alt+<lettre>` passent.
+- **Le relâchement d'un envoi inséré en partie** (« Les lots ») : `src/domaine/gestes.rs`,
+  `combinaison_inseree_en_partie_relache_dans_l_ordre_inverse`,
+  `alt_entourant_insere_en_partie_relache_puis_sort_en_3`,
+  `altgr_insere_en_partie_frappe_0xe8_avant_l_alt_droite`,
+  `unicode_insere_en_partie_relache_son_unite`, `relachement_insere_en_partie_sort_en_3`,
+  `relachements_relachent_les_boutons` et `un_clic_insere_en_partie_relache_son_bouton` : ce que le
+  début inséré a laissé enfoncé, touches, unités UTF-16 et boutons de la souris, se relâche d'un
+  seul envoi, sans lecture du premier plan, dans l'ordre inverse, chaque bouton de son côté, 0xE8
+  frappée avant une Alt ; rien ne part quand rien n'est resté enfoncé ; la commande sort en 3 en
+  disant les deux insertions.
 
 ## Révision
 

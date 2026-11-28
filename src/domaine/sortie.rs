@@ -61,10 +61,14 @@ pub fn echapper(texte: &str) -> String {
 }
 
 /// La valeur d'un champ : `texte` échappé, ses guillemets en `\"`, le tout entre guillemets s'il
-/// contient une espace ou un guillemet ; vide, `""`.
+/// contient un guillemet ou une espace, c'est-à-dire tout caractère blanc d'Unicode resté tel quel
+/// après l'échappement, U+00A0, U+2007 et U+202F compris ; vide, `""`. Le blanc se juge sur le
+/// texte échappé : une tabulation ou un retour, écrits `\t` ou `\n`, ne changent pas de forme, et
+/// un texte que l'application pilotée choisit ne peut pas forger une clé après un blanc qu'une
+/// session prendrait pour un séparateur.
 pub fn valeur(texte: &str) -> String {
     let echappe = echapper(texte).replace('"', r#"\""#);
-    if texte.is_empty() || texte.contains(' ') || texte.contains('"') {
+    if texte.is_empty() || texte.contains('"') || echappe.chars().any(char::is_whitespace) {
         format!("\"{echappe}\"")
     } else {
         echappe
@@ -125,6 +129,12 @@ impl Arret {
     }
 }
 
+/// L'échec du système : « échec du système : <quoi> » (ADR-0006, « Les messages »). Chaque échec
+/// du système passe par elle : le préfixe ne s'écrit qu'ici.
+pub(crate) fn echec(quoi: &str) -> Arret {
+    Arret::Echec(format!("échec du système : {quoi}"))
+}
+
 /// L'issue d'une commande : son code, ses lignes de la sortie standard, et le message de la sortie
 /// d'erreur, s'il y en a un.
 #[derive(Clone, Debug, PartialEq)]
@@ -141,6 +151,15 @@ impl Issue {
             code: Code::Fait,
             sortie,
             erreur: None,
+        }
+    }
+
+    /// Fait, ces lignes, et un avis sur la sortie d'erreur.
+    pub fn avis(sortie: Vec<String>, avis: String) -> Issue {
+        Issue {
+            code: Code::Fait,
+            sortie,
+            erreur: Some(avis),
         }
     }
 
@@ -200,6 +219,19 @@ mod tests {
         assert_eq!(valeur("a b"), r#""a b""#);
         assert_eq!(valeur(r#"a"b"#), r#""a\"b""#);
         assert_eq!(valeur("ab"), "ab");
+    }
+    // Un texte que l'application pilotée choisit (un `id`, une classe, une valeur) ne forge pas de
+    // clé dans la ligne : tout caractère blanc d'Unicode resté tel quel après l'échappement met la
+    // valeur entre guillemets, ce caractère gardé tel quel. Une tabulation, que l'échappement écrit
+    // `\t`, ne change pas de forme.
+    #[test]
+    fn valeur_entre_guillemets_si_blanc_d_unicode() {
+        assert_eq!(valeur("a\u{A0}motdepasse=oui"), "\"a\u{A0}motdepasse=oui\"");
+        for blanc in ['\u{2007}', '\u{202F}', '\u{3000}'] {
+            let texte = format!("a{blanc}motdepasse=oui");
+            assert_eq!(valeur(&texte), format!("\"{texte}\""));
+        }
+        assert_eq!(valeur("a\tb"), r"a\tb");
     }
     #[test]
     fn valeur_vide_s_ecrit_guillemets() {
@@ -286,6 +318,24 @@ mod tests {
                 sortie: vec![],
                 erreur: Some("poste verrouillé".into())
             }
+        );
+    }
+    #[test]
+    fn issue_avis_garde_sa_sortie() {
+        assert_eq!(
+            Issue::avis(vec!["a".into()], "b".into()),
+            Issue {
+                code: Code::Fait,
+                sortie: vec!["a".into()],
+                erreur: Some("b".into())
+            }
+        );
+    }
+    #[test]
+    fn echec_dit_ce_qui_a_echoue() {
+        assert_eq!(
+            echec("SendInput"),
+            Arret::Echec("échec du système : SendInput".into())
         );
     }
     #[test]

@@ -1,7 +1,8 @@
 //! L'analyse des arguments de `pilote` : les 21 sous-commandes du lot, leurs options et leurs
-//! bornes (décision 11 du plan maître), par clap. L'analyse ne lit aucune fenêtre. L'aide et la
+//! bornes (ADR-0006, « Les bornes »), par clap. L'analyse ne lit aucune fenêtre. L'aide et la
 //! version arrivent en `Aide` de code `Fait` ; toute autre erreur de clap, en `Aide` de code
-//! `Usage`, son message traduit en français, en une ligne, le texte tapé échappé (décision 6).
+//! `Usage`, son message traduit en français, en une ligne, le texte tapé échappé (ADR-0006, « Les
+//! messages »).
 
 use crate::domaine::sortie::Code;
 use crate::domaine::sortie::echapper;
@@ -358,7 +359,7 @@ impl ArgsSelecteur {
 }
 
 // L'attente de `focus`, `arbre`, `trouver` et `valeur`, telle que clap la lit : sa borne
-// (décision 11 du plan maître) s'écrit ici seulement.
+// (ADR-0006, « Les bornes ») s'écrit ici seulement.
 #[derive(clap::Args)]
 struct ArgsAttendre {
     /// L'attente, en millisecondes, 30 000 au plus.

@@ -4,4 +4,10 @@ examine_globs = ["src/domaine/**/*.rs"]
 additional_cargo_test_args = ["--lib"]
 
 # Un mutant équivalent ou qui boucle s'exclut ici, nommément, avec sa raison.
-exclude_re = []
+exclude_re = [
+    # `ancetres` ne suit un parent que s'il précède l'élément courant (`p < k`). `<=` n'en diffère
+    # que pour un élément qui est son propre parent, où il suivrait ce parent sans fin, la liste
+    # grossissant jusqu'à épuiser la mémoire : un test qui le tuerait le ferait boucler. Le cas est
+    # refusé avant tout jugement par `verifier_la_forme`, dont le test le couvre.
+    'src/domaine/element\.rs:\d+:\d+: replace < with <= in ancetres$',
+]

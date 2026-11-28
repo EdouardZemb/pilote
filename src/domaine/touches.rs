@@ -1,7 +1,8 @@
 //! Les touches de `touche` : leurs noms, leurs combinaisons, celles que `pilote` refuse, et le lot
-//! d'événements qui frappe une combinaison. L'analyse ne lit aucune fenêtre (décision 5) : une
-//! combinaison interdite sort en 1, un nom inconnu en 64, le texte reçu échappé dans le message
-//! (décision 6). Chaque lot relâche ce qu'il enfonce, dans l'ordre inverse.
+//! d'événements qui frappe une combinaison. L'analyse ne lit aucune fenêtre (ADR-0006,
+//! « L'analyse ») : une combinaison interdite sort en 1, un nom inconnu en 64, le texte reçu
+//! échappé dans le message (ADR-0006, « Les messages »). Chaque lot relâche ce qu'il enfonce, dans
+//! l'ordre inverse.
 
 use crate::domaine::sortie::Arret;
 use crate::domaine::sortie::echapper;
@@ -21,11 +22,21 @@ pub enum Evenement {
     Unicode { unite: u16, relachee: bool },
     /// Un mouvement de souris nul.
     SourisNulle,
+    /// Un déplacement absolu, en coordonnées normalisées du bureau virtuel (0 à 65 535).
+    Pointeur { x: u16, y: u16 },
+    /// Le bouton gauche, ou le droit, enfoncé ou relâché.
+    Bouton { droit: bool, relache: bool },
+    /// Un cran de molette : +CRAN vers le haut, -CRAN vers le bas.
+    Molette { delta: i32 },
 }
+
+/// Un cran de molette, `WHEEL_DELTA` de Windows.
+pub const CRAN: i32 = 120;
 
 /// Une touche nommée sur la ligne de commande. `F` va de 1 à 12 ; `Lettre` est une majuscule, de
 /// A à Z. `Barre` et `Interrogation` sont les caractères `/` et `?`, que la disposition du clavier
-/// place (décision 9) : ils n'ont pas de touche virtuelle fixe.
+/// place (ADR-0006, « Les touches et les textes à taper ») : ils n'ont pas de touche virtuelle
+/// fixe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NomTouche {
     Tab,
@@ -135,11 +146,12 @@ pub fn analyser_touche(texte: &str) -> Result<Combinaison, Arret> {
 }
 
 /// Refuse en 1, « touche interdite : <texte> », le texte reçu échappé, une combinaison qui ferait
-/// sortir la frappe de la fenêtre retenue : Win ou Windows en tout morceau, Alt avec Tab, Alt avec
-/// F6, qui passe d'une fenêtre à l'autre d'un même programme, Ctrl et Alt avec Suppr, Alt ou Ctrl
-/// avec Echap, quels que soient les autres modificateurs. Elle se reconnaît sur les noms, sous toute
-/// casse et dans tout ordre, sans qu'aucun autre morceau ait à être un nom connu : la commande juge
-/// ainsi tous ses arguments contre les interdites avant d'en analyser aucun.
+/// sortir la frappe de la fenêtre retenue : Win ou Windows en tout morceau, Alt avec Tab, Alt ou
+/// Ctrl avec F6, qui passent d'une fenêtre à l'autre d'un même programme, Ctrl et Alt avec Suppr,
+/// Alt ou Ctrl avec Echap, quels que soient les autres modificateurs. Elle se reconnaît sur les
+/// noms, sous toute casse et dans tout ordre, sans qu'aucun autre morceau ait à être un nom connu :
+/// la commande juge ainsi tous ses arguments contre les interdites avant d'en analyser aucun.
+/// Ctrl+Tab reste permis, pour les onglets d'un dialogue (ADR-0005, « Les touches interdites »).
 pub fn refuser_l_interdite(texte: &str) -> Result<(), Arret> {
     let morceaux: Vec<String> = texte.split('+').map(str::to_ascii_lowercase).collect();
     let porte = |nom: &str| morceaux.iter().any(|m| m == nom);
@@ -147,7 +159,7 @@ pub fn refuser_l_interdite(texte: &str) -> Result<(), Arret> {
     if porte("win")
         || porte("windows")
         || (alt && porte("tab"))
-        || (alt && porte("f6"))
+        || ((alt || ctrl) && porte("f6"))
         || (ctrl && alt && porte("suppr"))
         || ((alt || ctrl) && porte("echap"))
     {
@@ -239,7 +251,8 @@ pub fn caractere(touche: NomTouche) -> Option<char> {
 /// `MapVirtualKeyExW` (`MAPVK_VK_TO_VSC_EX`) : son octet bas est le code de balayage, et
 /// l'événement est étendu quand son octet haut vaut 0xE0, ou quand `vk` est l'une de 0x21 à 0x28,
 /// 0x2D ou 0x2E (PageHaut, PageBas, Fin, Debut, les flèches, Inser, Suppr), dont
-/// `MapVirtualKeyExW` rend le code du pavé numérique, sans 0xE0 (décision 9).
+/// `MapVirtualKeyExW` rend le code du pavé numérique, sans 0xE0 (ADR-0006, « Les touches et les
+/// textes à taper »).
 pub fn evenement(vk: u8, balayage_ex: u16, relachee: bool) -> Evenement {
     let [haut, bas] = balayage_ex.to_be_bytes();
     let etendue = haut == 0xE0 || matches!(vk, vk::PAGE_HAUT..=vk::BAS | vk::INSER | vk::SUPPR);
@@ -405,12 +418,30 @@ mod tests {
             "Alt+F6",
             "Alt+Maj+F6",
             "Ctrl+Alt+F6",
+            "Ctrl+F6",
+            "ctrl+maj+f6",
         ] {
             assert_eq!(
                 analyser_touche(t),
                 Err(Arret::Refus(format!("touche interdite : {t}"))),
                 "{t}"
             );
+        }
+    }
+    // Ctrl+F6 passe, comme Alt+F6, d'une fenêtre à l'autre d'un même programme : interdite sous
+    // toute casse et avec tout autre modificateur. F6 seule, Maj+F6, Ctrl+Tab et Ctrl+Alt+<lettre>
+    // restent permis (ADR-0005, « Les touches interdites »).
+    #[test]
+    fn ctrl_f6_est_interdite() {
+        for t in ["Ctrl+F6", "CTRL+F6", "Ctrl+Alt+F6", "Maj+Ctrl+F6"] {
+            assert_eq!(
+                analyser_touche(t),
+                Err(Arret::Refus(format!("touche interdite : {t}"))),
+                "{t}"
+            );
+        }
+        for t in ["F6", "Maj+F6", "Ctrl+Tab", "Ctrl+Alt+A"] {
+            assert!(analyser_touche(t).is_ok(), "{t}");
         }
     }
     #[test]
@@ -551,7 +582,8 @@ mod tests {
         }
     }
 
-    // Le texte reçu entre échappé dans les deux messages : il tient en une ligne (décision 6).
+    // Le texte reçu entre échappé dans les deux messages : il tient en une ligne (ADR-0006, « Les
+    // messages »).
     #[test]
     fn touche_recue_echappee() {
         assert_eq!(
@@ -682,6 +714,9 @@ mod tests {
             "F6+Alt",
             "Maj+F6+Alt",
             "Alt+F6+Bidule",
+            "F6+Ctrl",
+            "Maj+F6+Ctrl",
+            "Ctrl+F6+Bidule",
         ] {
             assert_eq!(
                 analyser_touche(t),
@@ -692,7 +727,7 @@ mod tests {
     }
 
     // Les voisines des interdites restent permises : Suppr sans Ctrl et Alt ensemble, Echap sans
-    // Ctrl ni Alt, Tab et F6 sans Alt.
+    // Ctrl ni Alt, Tab sans Alt, F6 sans Ctrl ni Alt.
     #[test]
     fn voisines_des_interdites_sont_permises() {
         for t in [
@@ -704,9 +739,7 @@ mod tests {
             "Maj+Tab",
             "Ctrl+Maj+Tab",
             "F6",
-            "Ctrl+F6",
             "Maj+F6",
-            "Ctrl+Maj+F6",
         ] {
             assert!(analyser_touche(t).is_ok(), "{t}");
         }
