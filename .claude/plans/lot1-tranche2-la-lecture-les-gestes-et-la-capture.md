@@ -46,11 +46,13 @@ avec le plan.
    l'amende dans la tâche qui le livre, jamais plus tard. La direction ne change pas : aucun nouvel ADR.
 2. **COM en MTA, l'AUMID sur un fil à part.** `lancer` initialise COM en `COINIT_MULTITHREADED` (le plan maître,
    « Tranche 2 ») : le client de l'automatisation y est sans fil d'interface, et une application figée ne bloque pas
-   `pilote` sur une pompe de messages. L'AUMID se lit sur un fil neuf, initialisé en `COINIT_APARTMENTTHREADED`,
-   puis `CoUninitialize` et `join` : sa lecture ne dépend pas du modèle du fil principal, que la documentation de
-   `SHGetPropertyStoreForWindow` ne dit pas, et c'est celle des essais (`Parametres::regle`, dans un processus en
-   STA), si bien que l'essai des Paramètres dit ce que lit `pilote`. Un fil qui ne naît pas, ou une lecture ratée,
-   rend `None`, comme aujourd'hui : le domaine refuse le cadre sans enfant lisible. Limite, qu'ADR-0005 dit : faute
+   `pilote` sur une pompe de messages. Les AUMID d'une énumération se lisent ensemble sur un seul fil neuf, initialisé
+   en `COINIT_APARTMENTTHREADED`, puis `CoUninitialize` et `join` : leur lecture ne dépend pas du modèle du fil
+   principal, que la documentation de `SHGetPropertyStoreForWindow` ne dit pas, et c'est celle des essais
+   (`Parametres::regle`, dans un processus en STA), si bien que l'essai des Paramètres dit ce que lit `pilote` ; un
+   fil par énumération, et non par fenêtre, garde le coût d'une commande. Un fil qui ne naît pas, ou qui panique, rend
+   `None` pour chaque fenêtre, et une lecture ratée `None` pour la sienne, comme aujourd'hui : le domaine refuse le
+   cadre sans enfant lisible. Limite, qu'ADR-0005 dit : faute
    d'une autre application du Store sur le runner, aucun essai ne prouve qu'un AUMID d'une autre application se lit ;
    un AUMID perdu ne refuserait à tort que le cadre réduit d'une telle application.
 3. **Les modules.** Le domaine gagne `element` (le modèle d'un élément, ses types, sa ligne, le classement des
@@ -61,16 +63,26 @@ avec le plan.
    `src/bureau/uia.rs` et `src/bureau/capture.rs`. C'est une précision de la décision 4 du plan maître, qui ne
    nommait que `selecteur`.
 4. **L'arbre se lit d'un seul tenant, sans valeur.** `lire_l_arbre(W)` rend tous les éléments de la vue de contrôle
-   sous W, W en tête (indice 0), en ordre de document, chacun avec l'indice de son parent ; la couche le lit par une
-   seule requête de cache (`TreeScope_Subtree`, le filtre par défaut, celui de la vue de contrôle) et garde ses
-   éléments. Le cache ne porte jamais la valeur d'un élément, et le motif LegacyIAccessible, qui la porte aussi,
-   n'est jamais nommé (`UIA_ValueValuePropertyId`, `UIA_LegacyIAccessibleValuePropertyId`,
-   `UIA_LegacyIAccessiblePatternId` et `IUIAutomationLegacyIAccessiblePattern`, refusés dans `src/` par le contrôle
-   statique) : le domaine lit chaque valeur à part (`lire_la_valeur(i)`), jamais celle d'un élément marqué
-   `IsPassword`. Une lecture ratée de `IsPassword`, en cache ou courante, ou du processus du focus, fait échouer la
-   lecture entière (`ErreurUia`) : jamais un « pas un mot de passe » par défaut. Les gestes nomment l'élément par son
-   indice dans la dernière lecture. Une absence (un motif non offert, aucun enfant, aucun focus) arrive en `None` ou en
-   liste vide, jamais en erreur ; une erreur arrive en `ErreurUia { code, texte }`, que le domaine classe :
+   sous W, W en tête (indice 0), en ordre de document, chacun avec l'indice de son parent, son processus, et s'il est
+   une fenêtre (un HWND natif) ; la couche le lit par une seule requête de cache (`TreeScope_Subtree`, le filtre par
+   défaut, celui de la vue de contrôle) et garde ses éléments. Le cache ne porte jamais la valeur d'un élément, et ni
+   le motif LegacyIAccessible ni le motif Text, qui la portent aussi, ne sont nommés (leurs noms et celui de la
+   propriété de la valeur, refusés dans `src/` par le contrôle statique, décision 15) : le domaine lit chaque valeur à
+   part (`lire_la_valeur(i)`), juste après avoir relu le marquage courant de l'élément (`relire_le_marquage(i)`), et
+   jamais celle d'un élément marqué `IsPassword`, en cache ou relu : un champ qui passe en mot de passe entre la
+   lecture de l'arbre et celle de sa valeur ne la rend pas. Une lecture ratée de `IsPassword`, en cache ou courante,
+   ou du processus du focus, fait échouer la lecture entière (`ErreurUia`) : jamais un « pas un mot de passe » par
+   défaut. **Ce qui se lit reste dans W** : l'automatisation montre sous W, avant ses enfants ordinaires, chaque
+   fenêtre que W possède, quel que soit son processus (une invite d'identifiants, une fenêtre de KeePassXC, un autre
+   programme). Après chaque lecture de l'arbre, le domaine écarte (`hors`), avec son sous-arbre, tout élément hors de
+   la racine qui est une fenêtre et dont le processus n'est pas admis (`lectures::admis`) : P et le processus de
+   chaque fenêtre enfant de W le sont sans autre condition, la retenue les ayant jugés (P peut être KeePassXC sans
+   qu'aucune de ses fenêtres soit écartée) ; un autre processus l'est s'il est de l'arbre de P, à la retenue comme sur
+   l'instantané, et que ni la liste de refus ni la règle de KeePassXC ne le refusent (la règle d'`accepte` pour un
+   dialogue) : un élément écarté ne compte nulle part, ni ligne, ni candidat, ni focus, ni document vide. Le cadre d'une application du Store garde ainsi son contenu, fille d'un autre processus. Les gestes
+   nomment l'élément par son indice dans la dernière lecture. Une absence (un motif non offert, aucun enfant, aucun
+   focus) arrive en `None` ou en liste vide, jamais en erreur ; une erreur arrive en `ErreurUia { code, texte }`, que
+   le domaine classe :
    `UIA_E_ELEMENTNOTAVAILABLE` (0x80040201), `RPC_E_DISCONNECTED` (0x80010108) et `CO_E_OBJNOTCONNECTED`
    (0x800401FD) en 2, « l'élément a disparu » ; `UIA_E_TIMEOUT` (0x80131505) en 3, « échec du système : délai de
    l'automatisation dépassé » ; `UIA_E_ELEMENTNOTENABLED` (0x80040200) en 3, « échec du système : l'élément est
@@ -90,14 +102,16 @@ avec le plan.
    déterministe : sans elle, `ElementFromHandle(W)` pourrait rendre un arbre partiel lu par le proxy des fenêtres.
    `focus` juge le premier plan accepté avant toute lecture de l'automatisation (1, « focus hors de la fenêtre
    visée »), lit l'arbre de la fenêtre au premier plan accepté (W, ou un dialogue que W possède), puis le focus
-   (`GetFocusedElement`) : il faut que son processus soit de l'arbre retenu et qu'il soit un élément de cet arbre lu
-   (`CompareElements`), sinon 1, sans nom ni valeur.
+   (`GetFocusedElement`) : il faut que son processus soit de l'arbre retenu et qu'il soit un élément non écarté de cet
+   arbre lu (`CompareElements`), sinon 1, sans nom ni valeur.
 6. **Le document vide et l'attente.** Un arbre est vide si son `Document` le plus extérieur, celui de la page (le
-   premier, en ordre de document, qui n'a aucun ancêtre `Document`), n'a aucun enfant, ou si aucun de ses éléments
-   n'est d'un type hors de `Window`, `Pane` et `TitleBar`, le sous-arbre d'une `TitleBar` ne comptant pas : un
-   `Document` vide sous celui de la page (un `iframe` vide, un `role="document"`) ne rend pas l'arbre vide. Une seule
-   échéance borne la commande : `max(2 000 ms, --attendre)`, comptée depuis sa première lecture de l'arbre. Une seule
-   fonction du domaine (`lectures::lire_l_arbre`) relit l'arbre toutes les 100 ms tant qu'il est vide et que
+   premier, en ordre de document, qui n'a aucun ancêtre `Document`, ni d'ancêtre `Window` autre que la racine : un
+   dialogue que W possède passe avant la page), n'a aucun enfant, ou si aucun de ses éléments n'est d'un type hors de
+   `Window`, `Pane` et `TitleBar`, le sous-arbre d'une `TitleBar` ne comptant pas ; un élément écarté (décision 4) n'y
+   compte jamais. Un `Document` vide sous celui de la page (un `iframe` vide, un `role="document"`) ne rend pas l'arbre
+   vide. Une seule échéance borne la commande : `max(2 000 ms, --attendre)`, comptée depuis sa première lecture de
+   l'arbre (pour `focus`, dont le premier essai peut refuser le premier plan avant toute lecture, depuis ce premier
+   essai). Une seule fonction du domaine (`lectures::lire_l_arbre`) relit l'arbre toutes les 100 ms tant qu'il est vide et que
    l'échéance n'est pas passée, puis rend ce qu'elle a lu, vide ou non. `--attendre` rejoue ensuite, toutes les
    100 ms, tant que `--attendre` ne s'est pas écoulé depuis la même première lecture, les seuls jugements qui
    peuvent changer : aucun élément, aucun élément au rang, l'élément focalisé qui ne répond pas, le focus hors de la
@@ -105,7 +119,8 @@ avec le plan.
    même fonction, bornée à la même échéance, si bien que la commande ne dure jamais plus que l'échéance, au temps
    d'une lecture près. L'ambiguïté, le mot de passe, le motif absent et l'élément disparu arrêtent tout de suite. À
    la borne, l'arrêt est le dernier jugement.
-7. **Le sélecteur.** Les candidats sont tous les éléments de l'arbre sauf W, en ordre de document ; les options se
+7. **Le sélecteur.** Les candidats sont tous les éléments de l'arbre sauf W et les écartés (décision 4), en ordre de
+   document ; les options se
    cumulent. `--nom`, `--contient`, `--dans` et `--egale` comparent après NFC, U+00A0, U+202F et U+2007 comptés
    pour des espaces, des deux côtés, sensibles à la casse ; `--id` et `--classe` en égalité exacte ; `--type`
    prend un nom de la table des 41 types de l'automatisation (`Button` … `AppBar`, 50000 à 50040), sans égard à la
@@ -118,8 +133,11 @@ avec le plan.
 8. **La ligne d'un élément** : `[<Type>] <nom>`, puis, dans cet ordre, `id`, `classe`, `valeur` ou `motdepasse=oui`,
    `raccourci`, `acces`, `annonce`, `etat`, `dans`, `rang`. Un nom vide n'a pas de chevrons ; un `id`, une `classe`,
    un `raccourci` ou un `acces` vides n'ont pas leur clé ; `valeur` ne paraît que pour un élément qui offre le motif
-   Value, `valeur=""` s'il est vide ; `annonce` vaut `polite` (1) ou `assertive` (2), absente sinon ; `etat` suit
-   l'ordre d'ADR-0006 (`coche`, `decoche` ou `indetermine` pour Toggle 1, 0 ou 2 ; `choisi` ; `inactif` ; `deplie`
+   Value, `valeur=""` s'il est vide ; `motdepasse=oui` la remplace pour un élément marqué en cache, marqué au moment
+   de lire sa valeur (`relire_le_marquage`) ou, pour `focus`, marqué dans le focus lu ; une valeur ou un marquage qui
+   ne se lisent pas font échouer la lecture entière, par `arret_uia` ; `annonce` vaut `polite` (1) ou `assertive`
+   (2), absente sinon ; `etat` suit l'ordre d'ADR-0006 (`coche`, `decoche` ou `indetermine` pour Toggle 1, 0 ou 2 ;
+   `choisi` ; `inactif` ; `deplie`
    pour ExpandCollapse 1 ou 2, `replie` pour 0 ; `lecture-seule`). `focus`, `trouver`, `valeur` et `defilables`
    portent `dans` ; `trouver`, `rang` ; `arbre`, ni l'un ni l'autre : il commence par la ligne de W et indente de
    deux espaces par niveau ; `--max` compte ses lignes, et un arbre coupé sort en 0 avec « arbre coupé : <max>
@@ -159,47 +177,62 @@ avec le plan.
     cliente : <x>,<y> pour <l>×<h> »), dans le bureau virtuel (1, « point hors de l'écran : <x>,<y> »), la fenêtre de
     premier niveau sous lui acceptée comme le premier plan, sur l'instantané de la première lecture du premier plan
     (1, « point recouvert par une autre fenêtre ») ; le niveau du processus de la fenêtre au premier plan et de
-    celui de la fenêtre sous le point. Puis le premier plan relu, égal ; puis ce même point normalisé, le lot de
-    l'unité bâti sur lui, l'envoi, la cadence : une fenêtre qui bouge entre deux crans emmène le point du cran
+    celui de la fenêtre sous le point. Puis la seule relecture du premier plan, égale ; puis ce même point normalisé,
+    le lot de l'unité bâti sur lui, l'envoi, la cadence : une fenêtre qui bouge entre deux crans emmène le point du cran
     suivant, et la garde du point recouvert juge toujours le point qui reçoit l'événement. Une unité est un clic (le
     déplacement absolu, le bouton enfoncé, relâché), un double clic (le déplacement, deux fois enfoncé et relâché,
     d'un seul envoi) ou un cran (le déplacement, la molette de ±120, positif vers le haut). Le point se normalise au
     quart de pixel, à l'échelle de 65 536 sur l'étendue : `n = min(65535, (4 × (p − origine) + 1) × 65536 / (4 ×
-    étendue))`, sur chaque axe du bureau virtuel, sûr à cette échelle sous l'arrondi par défaut comme au plus proche.
-    La documentation de `MOUSEINPUT` ne dit que « de 0 à 65 535, (65535, 65535) au coin bas droit » : à l'échelle de
+    étendue))`, sur chaque axe du bureau virtuel, calculée en `i64` (dès 8 192 px d'écart à l'origine, le produit
+    dépasse `i32`, et un calcul qui déborde en silence, en release, enverrait le clic ailleurs que le point jugé),
+    sûr à cette échelle sous l'arrondi par défaut comme au plus proche. La documentation de `MOUSEINPUT` ne dit que
+    « de 0 à 65 535, (65535, 65535) au coin bas droit » : à l'échelle de
     65 535 sur `étendue − 1`, ce point tomberait un pixel avant au-delà des trois quarts de l'étendue. L'essai
     `clic_au_bord_du_bureau_virtuel` (Tâche 14) départage : s'il voit le pointeur un pixel avant le point visé, la
     formule passe à `n = ((p − origine) × 65535 + étendue − 2) / (étendue − 1)`, avec les valeurs attendues de
-    `normalisation_vise_le_quart_du_pixel` et de `clic_envoie_un_seul_lot`, et ADR-0005 dit l'échelle mesurée. Des
-    boutons inversés par le réglage de la souris s'échangent dans le domaine. Le pointeur n'est pas remis en place.
+    `normalisation_vise_le_quart_du_pixel` et de `clic_envoie_un_seul_lot`, et ADR-0005 dit l'échelle mesurée (Tâche
+    14, étape 5). Des boutons inversés par le réglage de la souris s'échangent dans le domaine ; le réglage se lit une
+    fois, juste après la sensibilité au DPI, avant la première unité, jamais entre la garde et l'envoi. Le pointeur
+    n'est pas remis en place.
 12. **KeePassXC, la règle du champ.** Quand P, ou le processus d'une fenêtre enfant de W, est KeePassXC (à la
-    retenue ou au rejugement) : `taper` refuse à la position 3, puis au rejugement, un texte qui porte une tabulation
-    ou un saut de ligne ; après la position 12, la réponse de W et l'ouverture de l'automatisation
-    (`lectures::ouvrir`) ; puis, dans la garde de chaque unité de `touche` et de `taper` (décision 13), les lectures
-    d'entre-deux sont l'arbre de la fenêtre au premier plan accepté, sondé s'il est vide (`lectures::lire_l_arbre`,
-    2 s), lu à la première unité et chaque fois que cette fenêtre change, puis le focus (`GetFocusedElement`) :
-    illisible (une erreur), absent, ou hors de cet arbre lu (`indice` nul), refus (« KeePassXC : focus illisible ») ;
-    dans un champ de mot de passe, `taper` refuse, et `touche` n'admet que Tab, Maj+Tab, Haut, Bas, Gauche, Droite,
-    Debut, Fin, PageHaut, PageBas et Echap, nus. Le focus se juge par son appartenance à l'arbre lu de la fenêtre au
+    retenue ou au rejugement) : `taper` refuse à la position 3, puis au rejugement, un texte dont une unité est une
+    tabulation ou une Entrée (un CR seul en donne une) ; après la position 12, la réponse de W et l'ouverture de
+    l'automatisation (`lectures::ouvrir`) ; puis, dans la garde de chaque unité de `touche` et de `taper` (décision
+    13), les lectures d'entre-deux sont l'arbre de la fenêtre au premier plan accepté, sondé s'il est vide
+    (`lectures::lire_l_arbre`, 2 s), lu à la première unité et chaque fois que cette fenêtre change, puis le focus
+    (`GetFocusedElement`) : illisible (une erreur), absent, hors de cet arbre lu (`indice` nul) ou sur un élément
+    écarté, sur la fenêtre lue elle-même (indice 0) ou sur un élément de type `Window`, `Pane` ou `Document`, refus
+    (« KeePassXC : focus illisible ») : juste après une activation, le focus du système reste un instant sur la
+    fenêtre hôte avant de passer dans le champ que l'application restaure, et une frappe partie alors arriverait dans
+    ce champ ; refuser tout de suite est le sens sûr, au prix d'un refus de trop dans un `Document` de Qt. Un échec de
+    la réponse de W, de l'ouverture ou de la lecture de l'arbre sort par `arret_uia` (3, ou 2 pour l'élément disparu),
+    comme tout échec du système pendant un geste, sans compte d'unités. Dans un champ de mot de passe, `taper`
+    refuse, et `touche` n'admet que Tab, Maj+Tab, Haut, Bas, Gauche, Droite, Debut, Fin, PageHaut, PageBas et Echap,
+    nus. Le focus se juge par son appartenance à l'arbre lu de la fenêtre au
     premier plan, et non par son processus : un élément de WebView2 peut porter le PID de `msedgewebview2`, un
     descendant de P, et l'arbre de Chromium, qui ne se bâtit qu'à la première requête, rendrait sinon le document ou
     la fenêtre hôte pour focus, sans `IsPassword`. Un focus sur un élément né après la lecture de l'arbre refuse aussi,
     le sens sûr. La cadence y vaut 100 ms au lieu de 5, pour que le focus déplacé par une tabulation se lise avant
     l'unité suivante ; c'est une limite, que la règle borne sans la fermer. `activer` vers KeePassXC reste permis.
 13. **La garde d'une unité.** Juste avant chaque envoi (une combinaison, un caractère, un clic, un cran) et chaque
-    appel qui agit de l'automatisation, dans cet ordre : (a) le premier plan accepté (`premier_plan_accepte` : sa
-    lecture, l'instantané des processus, sa relecture) ; (b) les lectures d'entre-deux, chacune seulement si elle a
+    appel qui agit de l'automatisation, dans cet ordre : (a) le premier plan accepté (`premier_plan_et_instantane` :
+    sa lecture, l'instantané des processus, qu'il rend, sa relecture) ; (b) les lectures d'entre-deux, chacune seulement si elle a
     lieu d'être : le niveau d'intégrité de chaque processus autre que P qui tient la fenêtre au premier plan accepté
     (un dialogue que W possède) ou, pour le pointeur, la fenêtre sous le point, comparé à celui de `pilote` comme
     celui de P (1, « fenêtre plus élevée que pilote », ou « niveau d'intégrité illisible »), chaque PID une fois par
     commande ; pour le pointeur, le point (décision 11) ; pour KeePassXC, l'arbre et le focus (décision 12) ; (c) si
-    (b) a lu quoi que ce soit, le premier plan accepté relu, qui doit égaler celui de (a), chaîne des propriétaires
-    comprise (sinon 1, « le premier plan a changé : <k> unités sur <n> sont parties ») ; (d) l'envoi, ou l'appel,
-    juste après la dernière lecture du premier plan. Rien ne s'intercale donc entre le dernier contrôle et l'envoi,
-    comme ADR-0005 le veut (« Le premier plan accepté »), et une unité qui n'a rien à lire en (b) garde la seule
-    lecture de la tranche 1. Au faux bureau, chaque `Envoi` et chaque `Agir` suit exactement `[PremierPlan, Processus,
-    PremierPlan]` : `premier_plan_verifie_avant_chaque_unite` le garde pour `taper`, et ses jumeaux pour KeePassXC, un
-    dialogue d'un autre processus, `clic`, `molette` et chaque geste de l'automatisation (Tâches 8 à 10).
+    (b) a lu quoi que ce soit, une seule lecture du premier plan, qui doit égaler la dernière de (a), chaîne des
+    propriétaires comprise (sinon 1, « le premier plan a changé : <k> unités sur <n> sont parties ») : le même HWND,
+    le même PID et la même chaîne disent que W et ce processus vivent encore, si bien qu'aucun PID n'a pu être repris
+    et que le jugement d'`accepte` sur l'instantané de (a) tient, quand un nouvel instantané séparerait les lectures
+    de (b) de l'envoi de quelques millisecondes ; (d) l'envoi, ou l'appel, juste après la dernière lecture du premier
+    plan. Rien ne s'intercale donc entre le dernier contrôle et l'envoi, et une lecture de (b) n'en est séparée que
+    par une lecture du premier plan, comme ADR-0005 le veut (« Le premier plan accepté ») ; une unité qui n'a rien à
+    lire en (b) garde la seule lecture de la tranche 1. Au faux bureau, chaque `Envoi` et chaque `Agir` suit exactement
+    `[PremierPlan, Processus, PremierPlan]`, ou `[PremierPlan, Processus, PremierPlan, <lectures d'entre-deux, sans
+    Processus ni PremierPlan>, PremierPlan]` : `premier_plan_verifie_avant_chaque_unite` le garde pour `taper`, et ses
+    jumeaux pour KeePassXC, un dialogue d'un autre processus, `clic`, `molette` et chaque geste de l'automatisation
+    (Tâches 8 à 10).
 14. **Ctrl+F6** (Edouard, 28/11/2026) rejoint les touches interdites : `(alt || ctrl) && f6`, quels que soient les
     autres modificateurs et l'ordre, jugé avant toute touche inconnue comme les autres interdites. `Ctrl+Tab` reste
     permis (Edouard, 28/11/2026 : les onglets des boîtes de dialogue) : ADR-0005 en dit la limite, il change de
@@ -209,9 +242,13 @@ avec le plan.
 15. **Le contrôle statique** gagne quatre règles, chacune avec sa plantation : `CreateProcess` et `ShellExecute`
     rejoignent les mots de lancement de `tests/` ; `CreateRestrictedToken`, `CreateProcessAsUser`,
     `SetTokenInformation`, `UIA_ValueValuePropertyId`, `UIA_LegacyIAccessibleValuePropertyId`,
-    `UIA_LegacyIAccessiblePatternId` et `IUIAutomationLegacyIAccessiblePattern` sont refusés dans `src/` (le code de
-    la décision 14 du plan maître vit dans les essais ; la valeur ne passe ni par le cache ni par le motif
-    LegacyIAccessible, qui la porte aussi) ; un `#[test]` qui n'est pas en tête de ligne est une faute, hors de
+    `UIA_LegacyIAccessiblePatternId`, `IUIAutomationLegacyIAccessiblePattern`, et les noms du motif Text
+    (`UIA_TextPatternId`, `UIA_TextPattern2Id`, `UIA_TextEditPatternId`, `UIA_TextChildPatternId`,
+    `IUIAutomationTextPattern`, `IUIAutomationTextEditPattern`, `IUIAutomationTextChildPattern`,
+    `IUIAutomationTextRange`) sont refusés dans `src/` (le code de la décision 14 du plan maître vit dans les essais ;
+    la valeur ne passe ni par le cache ni par les motifs LegacyIAccessible et Text, qui la portent aussi ; une tranche
+    qui aurait besoin du motif Text, comme `annonces`, ne lève la règle qu'avec un marquage relu juste avant, jugé
+    dans le domaine et testé) ; un `#[test]` qui n'est pas en tête de ligne est une faute, hors de
     `tests/statique.rs` ; `ToUnicodeEx(` hors de `src/bureau/clavier.rs`, ou sans
     `OCTET_BAS` dans les trois lignes qui le suivent, est une faute, ce qui donne à LE-2 un critère de sortie qui se
     ferme.
@@ -279,9 +316,9 @@ avec le plan.
 | 2 | `l'élément focalisé ne répond pas au sélecteur` | `focus` |
 | 2 | `aucun élément « <nom> » pour --dans` | `arbre` |
 | 2 | `la valeur diffère de « <texte> »` | `valeur --egale` |
-| 2 | `l'élément a disparu` | toutes celles de l'automatisation |
-| 3 | `échec du système : la fenêtre ne répond pas` | lectures, capture, gestes de l'automatisation |
-| 3 | `échec du système : délai de l'automatisation dépassé` | toutes celles de l'automatisation |
+| 2 | `l'élément a disparu` | toutes celles de l'automatisation, `touche` et `taper` vers KeePassXC |
+| 3 | `échec du système : la fenêtre ne répond pas` | lectures, capture, gestes de l'automatisation, `touche` et `taper` vers KeePassXC |
+| 3 | `échec du système : délai de l'automatisation dépassé` | toutes celles de l'automatisation, `touche` et `taper` vers KeePassXC |
 | 3 | `échec du système : délai de l'automatisation dépassé pendant le geste ; il a pu agir : relire avant de rejouer` | les gestes de l'automatisation |
 | 3 | `échec du système : l'élément est inactif` ; `échec du système : l'élément refuse le geste` | toutes celles de l'automatisation |
 | 3 | `échec du système : pilote n'est pas sensible au DPI` | `capture`, `clic`, `molette` |
@@ -306,7 +343,7 @@ livre (décision 1), et la PR les redéclare.
 - **Plan maître, ligne 45, et ADR-0006, « Conséquences »** (« un changement passe par un nouvel ADR ») : les ADR
   s'amendent en place, par la règle de `docs/modele/documentation.md` v0.15.0, sans nouvel ADR (décision 1). La
   compétence, qui naît à la tranche 4, n'a rien à suivre dans cette PR.
-- **Plan maître, décision 4** : six modules du domaine de plus que `selecteur`, et deux fichiers de la couche
+- **Plan maître, décision 4** : cinq modules du domaine de plus que `selecteur`, et deux fichiers de la couche
   (décision 3).
 - **Plan maître, décision 14** : le message attendu au jeton restreint est « fenêtre plus élevée que pilote », non
   « niveau d'intégrité illisible », d'après ADR-0005 ; `fenetres` au jeton restreint passe d'abord ; toute autre
@@ -323,11 +360,14 @@ livre (décision 1), et la PR les redéclare.
   et les reprises de `--attendre` partagent une seule échéance, `max(2 s, --attendre)`, comptée depuis la première
   lecture ; le document vide est celui de la page, le plus extérieur (décision 6).
 - **ADR-0005, « Le premier plan accepté »** (« L'envoi qui suit part juste après elle ») : ce qui doit se lire avant
-  une unité (le niveau d'un processus pas encore jugé, le point, l'arbre et le focus de KeePassXC) se lit entre deux
-  lectures du premier plan accepté, qui doivent être égales, et l'envoi ou l'appel suit la dernière (décision 13).
+  une unité (le niveau d'un processus pas encore jugé, le point, l'arbre et le focus de KeePassXC) se lit entre le
+  premier plan accepté et une seule relecture du premier plan, qui doit égaler sa dernière lecture, et l'envoi ou
+  l'appel suit cette relecture ; l'ADR dit pourquoi une lecture suffit, sans nouvel instantané (décision 13).
 - **ADR-0005, « KeePassXC »** : le refus entier de la tranche 1 cède à la règle du champ, le focus jugé sur l'arbre
-  lu de la fenêtre au premier plan (décision 12) ; la conséquence « D'ici la tranche 2 du lot 1, KeePassXC ne
-  reçoit ni `touche` ni `taper` » se retire.
+  lu de la fenêtre au premier plan ; un focus sur la fenêtre lue, un `Window`, un `Pane`, un `Document` ou un élément
+  écarté est illisible ; un texte refusé se juge sur ses unités ; un échec de l'ouverture ou de l'arbre sort en 3
+  (décision 12) ; la conséquence « D'ici la tranche 2 du lot 1, KeePassXC ne reçoit ni `touche` ni `taper` » se
+  retire.
 - **ADR-0005, « Les touches interdites »** et sa précision de la tranche 1 (« F6, Ctrl+F6 et Maj+F6 restent
   permis ») : Ctrl+F6 interdite ; la limite de `Ctrl+Tab`, et l'exception qu'il fait à « une touche dont on apprend
   qu'elle change de fenêtre rejoint la liste » ; `Ctrl+Alt+<lettre>` inchangé (décision 14).
@@ -336,10 +376,16 @@ livre (décision 1), et la PR les redéclare.
   en CI (décision 2).
 - **ADR-0005, « Ce qu'on lit reste dans la fenêtre retenue »** : l'ordre des lectures, la réponse de W en 2 000 ms,
   les délais de l'automatisation, et la règle de `focus` par `GetFocusedElement` et `CompareElements`
-  (décision 5) ; une lecture ratée de `IsPassword` fait échouer la lecture (décision 4).
+  (décision 5) ; une fenêtre que W possède, d'un processus qui n'est ni P, ni celui d'une fenêtre enfant de W, ni
+  admis par la règle d'`accepte`, écartée de toute lecture et de tout geste, avec son sous-arbre (décision 4).
+- **ADR-0005, « Les valeurs secrètes ne sortent jamais »** : `focus` nommé à côté de `valeur`, `arbre` et `trouver` ;
+  aucune valeur par le cache, ni par les motifs LegacyIAccessible et Text, dont le contrôle statique refuse les noms
+  dans `src/` ; le marquage relu juste avant chaque valeur ; une lecture ratée de `IsPassword`, d'une valeur ou du
+  marquage fait échouer la lecture (décisions 4, 8 et 15).
 - **ADR-0005, « Les gestes et l'ordre des gardes »** : l'ordre des gestes de l'automatisation (décision 9) ; celui
   de `clic` et `molette`, avec la sensibilité au DPI, le point relu à chaque unité, le point hors de l'écran, la
-  normalisation et son échelle, et les boutons inversés (décision 11) ; le niveau d'un dialogue d'un autre
+  normalisation, son calcul en `i64` et son échelle, et les boutons inversés, lus une fois avant la première unité
+  (décision 11) ; le niveau d'un dialogue d'un autre
   processus, ou de la fenêtre sous le point (décision 13) ; Verr. Maj illisible refusée (décision 18).
 - **ADR-0005, « Le journal », « Après un geste »** : un appel de l'automatisation qui agit compte comme un geste
   dès avant de partir (décision 9).
@@ -348,8 +394,9 @@ livre (décision 1), et la PR les redéclare.
 - **ADR-0006, « La sortie »** : l'ordre des clés d'une ligne d'élément, la ligne de W en tête de `arbre`, son
   indentation, `dans` et `rang` selon la sous-commande, `defilables` (décision 8) ; la ligne `[Capture]`, et les clés
   `largeur`, `hauteur` et `zone-cliente` dans la liste des clés (décision 10).
-- **ADR-0006, « Le sélecteur »** : les candidats sans W, `--type` sans égard à la casse et le type inconnu en 64,
-  le sélecteur vide en 64, `--rang` borné par clap, `focus --rang` refusé, `--egale` normalisé (décision 7).
+- **ADR-0006, « Le sélecteur »** : les candidats sans W ni éléments écartés, `--type` sans égard à la casse et le
+  type inconnu en 64, le sélecteur vide en 64, `--rang` borné par clap, `focus --rang` refusé, `--egale` normalisé
+  (décision 7).
 - **ADR-0006, « L'attente »** : la définition du document vide, l'échéance unique `max(2 s, --attendre)`, les
   jugements qui se rejouent et ceux qui arrêtent (décision 6).
 - **ADR-0006, « Les gestes de l'automatisation »** : l'algorithme détaillé de `choisir`, `defiler` vertical, le
@@ -380,17 +427,23 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
   du domaine.
 - La couche ne choisit ni un élément, ni un motif, ni un code de sortie : chaque méthode lit ou agit, et rend
   `None`, une liste vide ou une erreur. Elle n'a aucun test ; les essais de bout en bout l'éprouvent.
-- Aucun `SetValue`, aucune valeur dans le cache, aucune valeur d'un élément `IsPassword` lue par le domaine.
+- Aucun `SetValue`, aucune valeur dans le cache, aucune valeur d'un élément marqué `IsPassword`, en cache ou relu
+  juste avant, lue par le domaine.
 - Chaque refus d'avant l'activation se vérifie sans `Restaurer`, `Demande`, `Envoi` ni `Agir` au faux bureau ;
   chaque lecture sans `PrendreVerrou`, `EtatSession`, `Niveau`, `TouchesEnfoncees`, `Restaurer`, `Demande`, `Envoi`
   ni `Agir`.
-- Chaque `Envoi` et chaque `Agir` suit exactement `[PremierPlan, Processus, PremierPlan]` au faux bureau (décision
-  13) : une tâche qui ajoute un geste, ou une lecture avant une unité, ajoute le jumeau de
-  `premier_plan_verifie_avant_chaque_unite` qui le vérifie.
-- Le faux bureau panique sur une lecture de l'automatisation qui précède son ouverture : l'ordre se teste ainsi
-  dans chaque test.
-- Les tests du domaine des modules nouveaux emploient les aides de `gestes::essai` (Tâche 5) ; un test qui reprend
-  le nom d'un test de `gestes.rs` le dit autrement, pour qu'aucun nom ne double.
+- Chaque `Envoi` et chaque `Agir` suit exactement `[PremierPlan, Processus, PremierPlan]`, ou ce triplet, des
+  lectures d'entre-deux et une seule relecture du premier plan, au faux bureau (décision 13) : une tâche qui ajoute
+  un geste, ou une lecture avant une unité, ajoute le jumeau de `premier_plan_verifie_avant_chaque_unite` qui le
+  vérifie.
+- Le faux bureau pose `ordre_rompu`, puis panique, sur une lecture de l'automatisation qui précède son ouverture ;
+  `executer` rattrape toute panique (3, « panique »), si bien que `gestes::essai::x` finit par
+  `assert!(!b.ordre_rompu)` : l'ordre se vérifie ainsi dans chaque test, même dans un test qui ne juge que des
+  absences.
+- Les tests du domaine des modules nouveaux emploient les aides de `gestes::essai` (Tâche 5), d'`element::essai`
+  (Tâche 3) et `faux::image_d_essai` (Tâche 5) ; un test qui reprend le nom d'un test de `gestes.rs` le dit
+  autrement, pour qu'aucun nom ne double, sauf un test de `gestes.rs` que la tranche remplace sous le même nom, qui
+  retire l'ancien (Tâche 8).
 - Une étape « voir rouge » qui nomme deux filtres les met après `--` (`cargo test --lib -- domaine::a domaine::b`) :
   avant lui, `cargo test` n'en prend qu'un, et refuse le second sans rien compiler ni lancer.
 - À la fin des Tâches 2 à 10, `cargo mutants -p pilote -F '^src/domaine/<module>\.rs:'` (cargo-mutants 27.1.0 est
@@ -405,7 +458,9 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
   s'entend avec `--fenetre appli-essai`.
 - Les essais de bout en bout se jugent par sondage, jamais par une relance ; un essai instable se dit à Edouard
   avant d'en changer le statut ; une précondition de l'environnement (le niveau haut du runner, 96 DPI) se vérifie
-  d'abord et panique avec sa raison, pour qu'un rouge dise un défaut de `pilote` ou du runner, jamais un hasard.
+  d'abord et panique avec sa raison, pour qu'un rouge dise un défaut de `pilote` ou du runner, jamais un hasard :
+  chaque essai qui compare des pixels de `pilote` à ceux des essais, ou vise un point CSS, commence par
+  `exiger_96_dpi` (Tâche 13), le processus des essais n'étant pas sensible au DPI.
 - Chromium sert l'arbre depuis la copie du navigateur, qui suit la page en différé : dans un essai, une lecture
   qui suit un geste attend d'abord l'événement de la page qui prouve le geste (la `saisie` du texte complet, le
   `change`, le `focus`), puis `CALME`, comme les essais de la tranche 1 ; ou bien une lecture qui attend
@@ -415,12 +470,22 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
 ## Points de vigilance
 
 - Une lecture qui s'intercale entre le dernier contrôle du premier plan et l'envoi (le focus de KeePassXC, le
-  niveau d'un dialogue, le point) : une fenêtre qui prend le premier plan pendant elle recevrait l'unité —
+  niveau d'un dialogue, le point) : une fenêtre qui prend le premier plan pendant elle recevrait l'unité ; un
+  instantané des processus entre elle et l'envoi l'éloignerait de quelques millisecondes —
   `premier_plan_verifie_avant_chaque_unite` et ses jumeaux (Tâches 8, 9 et 10),
   `keepassxc_premier_plan_change_pendant_la_lecture_du_focus` (Tâche 8).
+- Une fenêtre qu'un autre processus fait posséder par W, que l'automatisation montre sous W (une invite
+  d'identifiants, KeePassXC) : ses noms et ses valeurs sortiraient par `arbre`, un geste agirait sur elle —
+  `borner_ecarte_une_fenetre_d_un_processus_non_admis` (Tâche 3),
+  `arbre_ecarte_une_fenetre_possedee_d_un_autre_processus` (Tâches 6 et 13),
+  `invoquer_ignore_un_element_d_une_fenetre_possedee_d_un_autre_processus` (Tâche 9).
+- Le focus de KeePassXC lu sur la fenêtre hôte juste après l'activation, avant que l'application le rende au champ
+  de mot de passe — `keepassxc_focus_illisible_refuse` (Tâche 8), `copie_keepassxc_garde_son_champ` et son témoin
+  `focus` (Tâche 15).
 - Un élément qui disparaît entre la lecture et le geste, une liste rechargée : le code 2, jamais un plantage —
-  `element_disparu_sort_en_2` (Tâche 9, et Tâche 14 sur une case que son clic retire) et
-  `arret_uia_classe_les_codes` (Tâche 3).
+  `element_disparu_sort_en_2` (Tâche 9, par l'appel qui agit), `choisir_sonde_un_element_disparu` (Tâche 9, par la
+  sonde d'état, le jumeau de l'essai `element_disparu_sort_en_2` de la Tâche 14 sur une case que son clic retire),
+  `valeur_illisible_fait_echouer_la_lecture` (Tâche 6) et `arret_uia_classe_les_codes` (Tâche 3).
 - Un `Invoke` qui ouvre un dialogue modal et ne rend la main qu'à sa fermeture : le délai coupe un geste qui a
   agi, et une session qui lirait « échec » le rejouerait — `delai_pendant_le_geste_dit_qu_il_a_pu_agir` (Tâche 9).
 - Un hôte qui ne répond plus, une page dont le seul JavaScript est figé : 3 sans attendre la fin du gel, puis
@@ -428,9 +493,11 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
   (Tâche 7), `arbre_d_un_hote_fige_sort_en_3`, `capture_d_un_hote_fige_sort_en_3` et
   `arbre_d_une_page_figee_rend_l_arbre_d_avant` (Tâche 13).
 - Une valeur de mot de passe qu'une option ferait sortir par un détour (`--egale` comme oracle, `arbre`,
-  `trouver`), ou une lecture ratée de `IsPassword` prise pour « pas un mot de passe » —
-  `valeur_refuse_un_mot_de_passe_meme_avec_egale` et `arbre_ne_lit_jamais_la_valeur_d_un_mot_de_passe` (Tâche 6),
-  la revue de la Tâche 11, `mot_de_passe_ne_sort_jamais` (Tâche 13).
+  `trouver`, `focus`), un champ qui passe en mot de passe après la lecture de l'arbre, ou une lecture ratée de
+  `IsPassword` prise pour « pas un mot de passe » — `valeur_refuse_un_mot_de_passe_meme_avec_egale`,
+  `arbre_ne_lit_jamais_la_valeur_d_un_mot_de_passe`, `focus_sur_un_mot_de_passe_ne_lit_pas_la_valeur`,
+  `trouver_un_mot_de_passe_ne_lit_pas_la_valeur`, `valeur_marquee_a_la_lecture_n_est_pas_rendue` et
+  `chaque_valeur_suit_son_marquage` (Tâche 6), la revue de la Tâche 11, `mot_de_passe_ne_sort_jamais` (Tâche 13).
 - Un point de clic sur une fenêtre toujours au-dessus, ou hors de l'écran quand la fenêtre déborde, ou une fenêtre
   qui bouge entre deux crans — `clic_refuse_un_point_recouvert_dans_le_domaine`,
   `clic_refuse_un_point_hors_de_l_ecran` et `chaque_unite_relit_le_point` (Tâche 10),
@@ -439,7 +506,8 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
   de travers, le clic hors du point jugé — `capture_sans_dpi_par_ecran_sort_en_3` (Tâche 7) et
   `pointeur_sans_dpi_par_ecran_sort_en_3` (Tâche 10).
 - Une capture nommée dans un dossier absent, ou sur un fichier qui existe — `capture_dans_un_dossier_absent_sort_en_64`
-  et `capture_remplace_un_fichier_existant` (Tâche 7).
+  (Tâche 7), et `capture_relue` (Tâche 13), qui capture deux fois au même chemin : le domaine ne sait rien du
+  fichier, l'écrasement est celui de la couche.
 
 ## Mécanismes annoncés
 
@@ -450,7 +518,16 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
 - `src/domaine/gestes.rs:389` — `Travail::PasEncoreLivree(autre.nom())` — toute sous-commande hors de la tranche 1 sort en 64 ; les Tâches 6, 7, 9 et 10 en retirent douze
 - `src/domaine/gestes.rs:450` — `refuser_keepassxc(frappe.is_some()` — le refus entier de KeePassXC, que la Tâche 8 remplace par la règle du champ
 - `src/domaine/gestes.rs:535` — `fn juger_le_niveau` — le niveau ne se juge que pour P ; la Tâche 8 l'étend au processus d'un dialogue
-- `src/domaine/gestes.rs:604` — `fn premier_plan_accepte` — la lecture du premier plan, l'instantané, la relecture : la garde d'une unité la fait juste avant l'envoi, et de nouveau après toute lecture d'entre-deux (décision 13)
+- `src/domaine/gestes.rs:604` — `fn premier_plan_accepte` — la lecture du premier plan, l'instantané, la relecture : la garde d'une unité la fait juste avant l'envoi, puis, après toute lecture d'entre-deux, une seule lecture du premier plan (décision 13) ; l'instantané `tous` y reste local : la Tâche 6 en tire `premier_plan_et_instantane`, qui le rend, et dont `focus` et la garde d'une unité bornent l'arbre
+- `src/domaine/gestes.rs:296` — `catch_unwind(AssertUnwindSafe(|| derouler` — `executer` rattrape toute panique en 3 : le faux pose `ordre_rompu` avant de paniquer, et `gestes::essai::x` le vérifie (Tâche 5)
+- `src/domaine/gestes.rs:203` — `fn insertion_complete` — privée à `gestes.rs` ; la Tâche 10 la passe en `pub(crate)` pour le pointeur
+- `src/domaine/gestes.rs:175` — `fn envoyer` — `Suivi::envoyer`, privée à `gestes.rs`, est le seul envoi qui compte comme un geste (`agi`) : la Tâche 10 la passe en `pub(crate)`, pour que le pointeur envoie par elle, et `clic_compte_comme_un_geste` le garde
+- `src/domaine/gestes.rs:121` — `enum Frappe` — privée, comme `Journal` (l. 136) : les Tâches 6 et 9 les passent en `pub(crate)`, sinon `Suivi` et `preparer_le_geste` exposeraient un type privé
+- `src/domaine/gestes.rs:1708` — `fn keepassxc_rejuge_apres_l_activation` — le test de la tranche 1 attend le refus entier ; la Tâche 8 le retire et le récrit sous le même nom, avec la règle du champ
+- `src/domaine/gestes.rs:1177-1178` — `Le journal nomme le processus de la fenêtre retenue` — la seule preuve que le journal nomme P, non le nom demandé, dans un test que la Tâche 8 retire : son successeur reprend l'assertion
+- `src/domaine/texte.rs:139` — `'\r' => {` — un CR seul donne une Entrée : le refus du texte de KeePassXC se juge sur les unités (Tâche 8)
+- `src/domaine/faux.rs:405` — `self.touches_apres.clone()` — le faux ne rend les touches d'après qu'une fois la fenêtre activée : la position 11 du pointeur s'éprouve sous une activation (Tâche 10)
+- `src/bureau/fenetres.rs:84` — `pids_enfants: pids_enfants(h),` — les processus des fenêtres enfants de W, que la retenue juge : une fenêtre de l'arbre lu qui en porte un n'est pas écartée (décision 4)
 - `src/domaine/gestes.rs:1793` — `fn premier_plan_verifie_avant_chaque_unite` — chaque envoi de `taper` suit exactement `[PremierPlan, Processus, PremierPlan]` ; les Tâches 8 à 10 lui donnent ses jumeaux
 - `src/domaine/gestes.rs:797` — `fn aucun_geste` — les aides des tests de `gestes.rs` sont privées à son module de tests ; la Tâche 5 les passe dans `gestes::essai`
 - `src/domaine/gestes.rs:897` — `fn lecture_n_active_rien` — un test de ce nom existe déjà : celui de la Tâche 6 se nomme autrement
@@ -470,7 +547,8 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
 - `tests/statique.rs:240` — `starts_with("#[test]")` — seul un `#[test]` en tête de ligne se voit ; la Tâche 1 refuse les autres
 - `src/bureau/clavier.rs:133` — `& OCTET_BAS` — le seul appel de `ToUnicodeEx` passe l'octet bas, ce que la règle de la Tâche 1 garde
 - `src/bureau/clavier.rs:232` — `pub fn verr_maj` — Verr. Maj lue sur le fil de `pilote` ; la Tâche 11 la lit sur un fil neuf
-- `src/bureau/fenetres.rs:160` — `fn aumid` — l'AUMID lu sur le fil de `lancer`, en STA ; la Tâche 1 le lit sur un fil neuf en STA, le fil principal passant au MTA
+- `src/bureau/fenetres.rs:160` — `fn aumid` — l'AUMID lu sur le fil de `lancer`, en STA ; la Tâche 1 lit ceux d'une énumération sur un seul fil neuf en STA, le fil principal passant au MTA
+- `src/bureau/fenetres.rs:83` — `aumid: aumid(h),` — `lire` lit l'AUMID de chaque fenêtre de chaque énumération : un fil par fenêtre en coûterait des centaines par commande
 - `tests/commun/mod.rs:809` — `COINIT_APARTMENTTHREADED` — le processus des essais lit l'AUMID en STA, comme le fera `pilote`
 - `src/systeme.rs:103` — `SetProcessDpiAwarenessContext` — son résultat s'ignore ; la Tâche 5 ajoute au trait la sensibilité lue, que `capture`, `clic` et `molette` exigent
 - `.cargo/mutants.toml:3` — `examine_globs` — sous lui, `-f` ne restreint pas la mutation : chaque tâche passe `-F '^src/domaine/<module>\.rs:'`
@@ -496,10 +574,13 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
 - `.github/workflows/ci.yml:53` — `timeout-minutes: 9` — le délai de `windows`, remesuré à la Tâche 17
 - `.github/workflows/ci.yml:147` — `timeout-minutes: 19` — le délai de `mutants`, déjà sous deux fois son passage du 22/11
 - `.github/workflows/ci.yml:141` — `*.exe` — l'artefact exclut les copies ; la Tâche 13 y ajoute les PNG, la Tâche 16 les sorties du jeton restreint
+- `.github/workflows/ci.yml:94` — `--include-ignored --test-threads=1` — sans `--no-fail-fast`, cargo s'arrête au premier binaire d'essais rouge ; la Tâche 13 l'ajoute
+- `essai/appli/src/main.rs:279` — `essai://localhost/?focus={focus}` — l'adresse de la page se bâtit en texte : un `#` y ouvrirait le fragment, si bien que `--couleur` passe sans lui (Tâche 12)
 - `essai/appli/src/page.html:65` — `<div id="cadre">` — le cadre qui défile n'a ni rôle, ni nom, ni `tabindex` ; la Tâche 12 lui en donne
 - `essai/appli/src/page.html:121` — `geler 8` — le gel de l'hôte, sans signal de début ; la Tâche 12 en ajoute un
 - `essai/appli/src/main.rs:202` — `Ordre::Geler(secondes)` — l'hôte dort sans écrire ; la Tâche 12 écrit `{"genre":"gel"}` avant
-- `tests/essais_gardes.rs:392` — `fn copie_keepassxc_refuse_taper_et_touche` — l'essai du refus entier, que la Tâche 15 remplace
+- `tests/essais_gardes.rs:392` — `fn copie_keepassxc_refuse_taper_et_touche` — l'essai du refus entier, que la Tâche 8 retire avec le message, et que la Tâche 15 remplace
+- `tests/essais_gardes.rs:40` — `const KEEPASSXC` — le message de la tranche 1, que la Tâche 8 retire avec l'essai qui l'attend
 - `tests/essais_gardes.rs:445` — `2 => assert!(!a.message().contains(&chevrons)` — l'essai des Paramètres réduits ne dit pas quelle règle refuse
 
 ## Outils et cas limites
@@ -509,11 +590,13 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
 - `unicode-normalization`, la forme NFC — elle ne touche pas les espaces insécables — `nom_compte_les_insecables_pour_des_espaces`, Tâche 4
 - `png` 0.18.1 — sans `set_color`, l'encodeur prend des niveaux de gris, une largeur ou une hauteur nulles refusent l'en-tête, et l'image n'est finie qu'après `finish` — `png_sans_alpha` et `capture_vide_sort_en_3`, Tâche 7
 - `ElementFromHandleBuildCache` et `GetCachedChildren` — un élément sans enfant rend une erreur de code `HRESULT(0)`, pas une liste vide — `lecture_sonde_un_document_vide` (Tâche 13), le seul essai qui exerce la couche ; le domaine, qui reçoit la liste plate, rejoue la sonde par son homonyme de la Tâche 6
-- l'automatisation, par `GetCachedPatternAs` — un motif non offert arrive en erreur de code `HRESULT(0)` ; un élément disparu en `UIA_E_ELEMENTNOTAVAILABLE`, un fournisseur mort en `RPC_E_DISCONNECTED` — `arret_uia_classe_les_codes` (Tâche 3), `invoquer_un_element_sans_le_geste_sort_en_3` et `element_disparu_sort_en_2` (Tâches 9 et 14, la seconde sur une case que son clic retire de la page)
+- l'automatisation, par `GetCachedPatternAs` — un motif non offert arrive en erreur de code `HRESULT(0)` ; un élément disparu en `UIA_E_ELEMENTNOTAVAILABLE`, un fournisseur mort en `RPC_E_DISCONNECTED` — `arret_uia_classe_les_codes` (Tâche 3), `valeur_illisible_fait_echouer_la_lecture` (Tâche 6), `invoquer_un_element_sans_le_geste_sort_en_3`, `element_disparu_sort_en_2` (par l'appel qui agit) et `choisir_sonde_un_element_disparu` (par la sonde d'état), Tâche 9, ce dernier le jumeau de l'essai `element_disparu_sort_en_2` de la Tâche 14, sur une case que son clic retire de la page
+- l'automatisation, l'arbre sous une fenêtre — elle montre sous W, avant ses enfants ordinaires, chaque fenêtre que W possède, quel que soit son processus — `borner_ecarte_une_fenetre_d_un_processus_non_admis` et `document_vide_regle` (Tâche 3), `arbre_ecarte_une_fenetre_possedee_d_un_autre_processus` (Tâches 6 et 13, la seconde sur une copie nommée `CredentialUIBroker` que l'application possède, et que son témoin `enfants_uia` trouve d'abord sous W dans la vue de contrôle)
 - `FormatMessage`, par `Error::message()` de `windows-result` — il n'a aucun texte pour `UIA_E_ELEMENTNOTENABLED` ni `UIA_E_INVALIDOPERATION`, et prête à `UIA_E_NOTSUPPORTED` celui d'un autre code de même numéro — la couche écrit toujours le code, et `arret_uia_classe_les_codes` (Tâche 3) classe ces trois codes sans lire le texte
 - `Invoke`, et `Toggle` ou `Select` passés par le proxy des fenêtres — un contrôle qui ouvre un dialogue modal peut ne rendre la main qu'à sa fermeture, et le délai de transaction le coupe après que le geste a agi — `delai_pendant_le_geste_dit_qu_il_a_pu_agir`, Tâche 9
 - `IUIAutomation2` — `AutoSetFocus` vaut vrai par défaut : chaque motif déplacerait le focus avant d'agir — `SetAutoSetFocus(false)` à l'ouverture, et `defilables_et_defiler`, qui vérifie que le cadre défilé ne prend pas le focus, son témoin le lui donnant ensuite, Tâches 11 et 14
-- `GetFocusedElement` — il rend le focus du système, même hors de la fenêtre retenue, et, sur Chromium avant la première requête, le document ou la fenêtre hôte — `focus_hors_de_la_fenetre_visee_sort_en_1` (Tâches 6 et 13), `keepassxc_sonde_l_arbre_avant_le_focus` (Tâche 8), `copie_keepassxc_garde_son_champ` (Tâche 15)
+- `GetFocusedElement` — il rend le focus du système, même hors de la fenêtre retenue ; sur Chromium avant la première requête, le document ou la fenêtre hôte ; et, juste après une activation, la fenêtre hôte avant le champ que l'application restaure — `focus_hors_de_la_fenetre_visee_sort_en_1` (Tâches 6 et 13), `keepassxc_sonde_l_arbre_avant_le_focus` et `keepassxc_focus_illisible_refuse` (Tâche 8), `copie_keepassxc_garde_son_champ` (Tâche 15)
+- `CurrentIsPassword` et `CachedIsPassword` — le marquage en cache date de la lecture de l'arbre, et un champ qu'une bascule « masquer » passe en mot de passe ne le dit qu'en courant — `valeur_marquee_a_la_lecture_n_est_pas_rendue` et `chaque_valeur_suit_son_marquage`, Tâche 6
 - `Toggle` et `Select` de Chromium — ils rendent la main avant que l'état change — `choisir_attend_l_etat_avant_de_rebasculer` (Tâche 9), puis `choisir_attend_une_case_lente` (Tâche 14)
 - l'arbre de Chromium — il ne se bâtit qu'à la première requête, et le navigateur le sert depuis sa copie quand la page est figée — `lecture_sonde_un_document_vide` (Tâches 6 et 13), `arbre_d_une_page_figee_rend_l_arbre_d_avant` (Tâche 13)
 - `SendMessageTimeoutW`, `SMTO_ABORTIFHUNG` — il attend tout le délai tant que Windows ne tient pas la fenêtre pour figée, environ 5 s — `hote_qui_ne_repond_pas_sort_en_3` (Tâche 6), `arbre_d_un_hote_fige_sort_en_3`, qui borne la durée à 6 s (Tâche 13)
@@ -521,7 +604,7 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
 - `DWMWA_EXTENDED_FRAME_BOUNDS` — il ne suit pas la mise à l'échelle : il est en pixels physiques, que `GetWindowRect` et `GetClientRect` ne rendent que si `pilote` est sensible au DPI de chaque écran, ce que `SetProcessDpiAwarenessContext` peut refuser sans un mot — `capture_sans_dpi_par_ecran_sort_en_3` (Tâche 7), `pointeur_sans_dpi_par_ecran_sort_en_3` (Tâche 10), `rognage_garde_le_cadre_dwm` (Tâche 7), `capture_rogne_l_ombre` (Tâche 13), à 96 DPI seulement : hors de 96 DPI, rien n'est éprouvé en CI
 - `DeleteObject` et `CreateDIBSection` — une bitmap encore choisie dans un DC ne se supprime pas, et ses bits ne se lisent qu'après `GdiFlush` — la suite de `capturer` (Tâche 11), puis `capture_relue` (Tâche 13)
 - `WindowFromPoint` — il rend la fenêtre fille sous le point, pas sa fenêtre de premier niveau, et rien hors de l'écran — `clic_sur_un_dialogue_de_w_passe` et `clic_refuse_un_point_hors_de_l_ecran` (Tâche 10), `clic_refuse_un_point_recouvert` (Tâche 14)
-- `SendInput`, la souris — `MOUSEEVENTF_ABSOLUTE` prend des coordonnées de 0 à 65 535, (65535, 65535) au coin bas droit, sans dire ni l'échelle ni l'arrondi ; `VIRTUALDESK` vise tout le bureau virtuel ; `mouseData` est un `u32` qui porte la molette négative — `normalisation_vise_le_quart_du_pixel` (Tâche 10), `clic_clique_au_point` et `clic_au_bord_du_bureau_virtuel`, qui relisent la position du pointeur, le second sur la dernière colonne du bureau virtuel, et `molette_defile_la_roulette` (Tâche 14)
+- `SendInput`, la souris — `MOUSEEVENTF_ABSOLUTE` prend des coordonnées de 0 à 65 535, (65535, 65535) au coin bas droit, sans dire ni l'échelle ni l'arrondi ; `VIRTUALDESK` vise tout le bureau virtuel ; `mouseData` est un `u32` qui porte la molette négative — `normalisation_vise_le_quart_du_pixel` (Tâche 10, un bureau de 16 384 px compris, que seul un calcul en `i64` tient), `clic_clique_au_point` et `clic_au_bord_du_bureau_virtuel`, qui relisent la position du pointeur, le second sur la dernière colonne du bureau virtuel, et `molette_defile_la_roulette` (Tâche 14)
 - `GetSystemMetrics(SM_SWAPBUTTON)` — les boutons inversés échangent le gauche et le droit de `SendInput`, qui parle des boutons physiques — `boutons_inverses_echangent_les_boutons` (Tâche 10), `boutons_inverses_cliquent_a_gauche` (Tâche 14, sous `SwapMouseButton`)
 - `GetKeyState` — la file d'entrée d'un fil vivant ne suit l'état du clavier qu'en lisant ses messages — Verr. Maj lue sur un fil neuf (Tâche 11), et `comme_au_clavier_refuse_quand_verr_maj_est_allumee`, l'essai de la tranche 1, rejoué en CI
 - `SHGetPropertyStoreForWindow` — sa lecture sous le MTA n'est ni documentée ni éprouvée : `pilote` le lit sur un fil neuf en STA, comme `Parametres::regle` dans le processus des essais — `parametres_reduits_restent_refuses`, qui dit la règle qui refuse, Tâche 15
@@ -531,18 +614,26 @@ Celles du plan maître et de la tranche 1 valent toutes. En plus :
 - `icacls /setintegritylevel` — sans `(OI)(CI)`, les fichiers créés ensuite gardent le niveau haut, et sans `/T` ce qui existe déjà le garde aussi — le journal écrit par `pilote` au niveau moyen, lu par `refuse_une_fenetre_plus_elevee`, Tâche 16
 - `actions/upload-artifact` — un motif de plus n'élargit rien que les exclusions retirent — l'étape de dépôt relue aux Tâches 13 et 16, ses exclusions gardées en dernier
 - `cargo-mutants`, `-f` — sous l'`examine_globs` de `.cargo/mutants.toml`, il ne retire rien : `-f src/domaine/sortie.rs` liste les 354 mutants du domaine — `-F '^src/domaine/<module>\.rs:'`, dont `--list` rend les seuls mutants du module (21 pour `sortie.rs`, le 28/11/2026), à chaque passage de tâche, Tâches 2 à 10
-- `cargo test`, deux filtres avant `--` — il refuse le second (« unexpected argument »), sans compiler ni lancer un test, ce qu'une étape « voir rouge » prendrait pour le rouge attendu — chaque étape qui nomme deux filtres les met après `--`, Tâches 2, 3, 4, 6 et 9
+- `cargo test`, deux filtres avant `--` — il refuse le second (« unexpected argument »), sans compiler ni lancer un test, ce qu'une étape « voir rouge » prendrait pour le rouge attendu — chaque étape qui nomme deux filtres les met après `--`, Tâches 2, 3, 4, 5, 6 et 9
+- `cargo test` sans `--no-fail-fast` — il s'arrête au premier binaire de test en échec, et les essais des fichiers suivants ne tournent pas — l'étape des essais de la CI passe `--no-fail-fast` (Tâche 13), et chaque envoi des Tâches 13 à 16 se lit sur tous les binaires
+- `executer`, par `catch_unwind` — la panique du faux bureau y devient l'issue 3 « panique », qu'un test qui ne juge que des absences ne voit pas — `ordre_rompu`, posé par le faux avant de paniquer et vérifié par `gestes::essai::x` dans chaque test, et `lecture_avant_l_ouverture_panique`, Tâche 5
+- `Swatinem/rust-cache` — il restaure par une clé partielle, et un run de PR lit aussi les caches de la branche principale : supprimer les seuls caches de la PR ne rend pas un passage froid — Tâche 17, tous les caches du dépôt supprimés avant l'envoi, et « No cache found » exigé dans le journal de l'étape du cache de chaque job mesuré
+- tao, `with_position` — hors d'un écran, il remplace la position demandée par `CW_USEDEFAULT`, sans un mot — l'application pose `--position` par `set_outer_position`, la relit par `outer_position()` et sort en 1 sur un écart, Tâche 12 ; `clic_au_bord_du_bureau_virtuel`, qui place l'application au bord, Tâche 14
+- l'adresse de la page, bâtie en texte par l'hôte — un `#` y ouvre le fragment, que `location.search` ne lit pas — `--couleur` passe à la page sans `#`, et `capture_relue` relit la couleur, Tâches 12 et 13
+- `windows` 0.62.2 — `CachedLiveSetting` n'est que sur `IUIAutomationElement2`, et `GetCachedPropertyValue` demande `Win32_System_Ole` ; `ConvertStringSidToSidW` demande `Win32_Security_Authorization` ; `SendMessageTimeoutW` prend `WPARAM` et `LPARAM` — `cast::<IUIAutomationElement2>()` (Tâche 11), `CreateWellKnownSid` (Tâche 16), sans feature de plus : `cargo build` et `cargo clippy` sur le poste
+- `png::Decoder` 0.18.1 — il exige un lecteur `BufRead + Seek`, qu'un `File` nu n'est pas — `image_png` par `BufReader`, Tâche 13, `cargo build` sur le poste
 
 ## Effets cherchés
 
 - ADR-0005 et ADR-0006 amendés en place, avec leur section « Confirmation » — `docs/decisions/` et la compétence de la tranche 4, qui les décrira — la revue de la branche (Tâche 17) relit chaque ligne de la section des changements de ce plan contre le texte amendé, et chaque test nommé dans « Confirmation » contre le code
 - COM en MTA, l'AUMID lu sur un fil neuf en STA — chaque processus `pilote`, l'AUMID et l'automatisation — `parametres_reduits_restent_refuses` et `copie_systemsettings_refusee` en CI (Tâche 15), et chaque essai de lecture de la Tâche 13
-- la garde d'une unité, le premier plan relu après toute lecture d'entre-deux — chaque geste de `pilote`, au clavier, au pointeur et par l'automatisation — `premier_plan_verifie_avant_chaque_unite` et ses jumeaux (Tâches 8 à 10), puis `copie_keepassxc_garde_son_champ` et les essais des gestes en CI
+- la garde d'une unité, une seule lecture du premier plan après toute lecture d'entre-deux — chaque geste de `pilote`, au clavier, au pointeur et par l'automatisation — `premier_plan_verifie_avant_chaque_unite` et ses jumeaux (Tâches 8 à 10), puis `copie_keepassxc_garde_son_champ` et les essais des gestes en CI
+- une fenêtre que W possède, d'un processus que la retenue n'admet pas, écartée de toute lecture et de tout geste — chaque application que `pilote` lit, sur le poste comme en CI — les tests du domaine des Tâches 3, 6 et 9, puis `arbre_ecarte_une_fenetre_possedee_d_un_autre_processus` en CI (Tâche 13), sur une copie nommée `CredentialUIBroker`, que son témoin `enfants_uia` montre sous W
 - Ctrl+F6 interdite — toute session qui la frapperait, et la compétence de la tranche 4 — `ctrl_f6_est_interdite` et `ctrl_f6_avant_l_inconnu`, et la phrase d'ADR-0005 au présent
-- quatre règles du contrôle statique — chaque PR à venir, des lancements, du jeton, du cache et des tests — leurs plantations dans `tests/statique.rs`, et `sources_respectent_les_regles` vert sur la tête
+- quatre règles du contrôle statique — chaque PR à venir, des lancements, du jeton, des chemins de la valeur (le cache, les motifs LegacyIAccessible et Text) et des tests — leurs plantations dans `tests/statique.rs`, et `sources_respectent_les_regles` vert sur la tête
 - LE-1 et LE-2 clos — `docs/registre.md` — LE-2 par la règle `ToUnicodeEx` de la Tâche 1 ; LE-1 par `touche_bas_donne_arrowdown`, vert dans le job `windows` (Tâche 15), son état passé à « clos » à la Tâche 17
 - les PNG et les sorties du jeton restreint dans l'artefact — un essai rouge en CI — les motifs relus aux revues des Tâches 13 et 16, et le premier échec qui les montre
-- les délais de `windows` et `mutants` remesurés — la CI de chaque PR — `gh run view <id> --json jobs` sur un passage à froid de la tête, et le commentaire de chaque délai
+- les délais de `windows` et `mutants` remesurés — la CI de chaque PR — `gh run view <id> --json jobs` sur un passage à froid de la tête, tous les caches du dépôt supprimés avant son envoi et « No cache found » lu dans son journal, et le commentaire de chaque délai, qui nomme ce run
 - « pas encore livrée » réservé aux sous-commandes de la tranche 3 — les sessions qui appellent `pilote` — `sous_commande_pas_encore_livree_sort_en_64` sur `fermer`, et chaque sous-commande de la tranche 2 analysée et exécutée par ses tests
 - les options de fenêtre et les cibles de l'application d'essai — les essais des tranches 3 et 5, qui la reprennent — les tests `regles` de l'application, lancés par la sentinelle
 
@@ -563,18 +654,21 @@ src/lib.rs                      COM en MTA
 src/domaine/mod.rs              + element, selecteur, lectures, capture, automatisation, pointeur
 src/domaine/sortie.rs           + Issue::avis
 src/domaine/touches.rs          + Evenement::{Pointeur, Bouton, Molette}, CRAN ; Ctrl+F6 interdite
-src/domaine/element.rs          ElementLu, Defile, ErreurUia, la table des types, la ligne d'un élément,
-                                document_vide, arret_uia ; essai::arbre_d_essai (#[cfg(test)])
+src/domaine/element.rs          ElementLu, Defile, ErreurUia, la table des types, la ligne d'un élément, borner,
+                                document_vide, arret_uia ; essai::{arbre_d_essai, vide} (#[cfg(test)])
 src/domaine/selecteur.rs        normaliser, analyser_le_selecteur, repond, candidats, choisir_un, sous_arbres
-src/domaine/bureau.rs           + Rect, Point, DelaisUia, FocusLu, EtatLu, GesteUia, Image ; quatorze méthodes ;
+src/domaine/bureau.rs           + Rect, Point, DelaisUia, FocusLu, EtatLu, GesteUia, Image ; quinze méthodes ;
                                 verr_maj en Option
-src/domaine/lectures.rs         focus, arbre, trouver, valeur, defilables ; la réponse, l'ouverture, la sonde, l'attente
+src/domaine/lectures.rs         focus, arbre, trouver, valeur, defilables ; la réponse, l'ouverture, admis, la sonde,
+                                l'attente
 src/domaine/capture.rs          rogner, toute_noire, png, capturer
 src/domaine/automatisation.rs   focaliser, invoquer, choisir, defiler
 src/domaine/pointeur.rs         normaliser, lot, pointer
-src/domaine/gestes.rs           Travail étendu ; Suivi partagé ; preparer_le_geste ; la garde d'une unité ; KeePassXC ;
-                                Verr. Maj illisible ; essai (les aides des tests, #[cfg(test)])
-src/domaine/faux.rs             l'automatisation, la capture et le pointeur simulés ; les vols ; les niveaux par PID
+src/domaine/gestes.rs           Travail étendu ; Suivi (et son envoi), Journal, Frappe, insertion_complete et
+                                premier_plan_et_instantane partagés ; preparer_le_geste ; la garde d'une unité ;
+                                KeePassXC ; Verr. Maj illisible ; essai (les aides des tests, #[cfg(test)])
+src/domaine/faux.rs             l'automatisation, la capture et le pointeur simulés ; les vols ; les niveaux par PID ;
+                                ordre_rompu ; image_d_essai
 src/domaine/cli.rs              --rang de 1 à u32::MAX ; --x et --y négatifs ; aides
 src/bureau/mod.rs               BureauWindows : le client de l'automatisation, les éléments de la dernière lecture
 src/bureau/uia.rs               CUIAutomation8, ses délais, la requête de cache, la lecture, les motifs, ErreurUia
@@ -583,15 +677,17 @@ src/bureau/fenetres.rs          + repond, zone_cliente, fenetre_sous, bureau_vir
                                 fil neuf en STA
 src/bureau/clavier.rs           + la souris dans `entree`, boutons_inverses ; verr_maj sur un fil neuf
 tests/statique.rs               les quatre règles de la décision 15
-tests/commun/mod.rs             image_png, zone_cliente, cadre_dwm, position_du_pointeur, dpi, fenetre_au_point,
-                                bureau_virtuel, BoutonsInverses, Parametres::regle ; pilote_restreint, Jeton
-tests/essais_lecture.rs         focus, arbre, trouver, valeur, defilables, capture
-tests/essais_gestes.rs          focaliser, invoquer, choisir, defiler, clic, molette
-tests/essais_gardes.rs          KeePassXC, le jeton restreint, SystemSettings, les Paramètres
+tests/commun/mod.rs             image_png, zone_cliente, cadre_dwm, position_du_pointeur, dpi, exiger_96_dpi,
+                                fenetre_au_point, bureau_virtuel, fenetre_de, proprietaire_de, enfants_uia,
+                                BoutonsInverses, Parametres::regle ; pilote_restreint, Jeton
+tests/essais_lecture.rs         focus, arbre, trouver, valeur, capture, la fenêtre possédée écartée
+tests/essais_gestes.rs          defilables, focaliser, invoquer, choisir, defiler, clic, molette
+tests/essais_gardes.rs          KeePassXC (l'essai de la tranche 1 retiré à la Tâche 8), le jeton restreint,
+                                SystemSettings, les Paramètres
 tests/essais_clavier.rs         touche_bas_donne_arrowdown
-essai/appli/src/main.rs         --couleur, --au-dessus, --position, --taille ; la ligne `gel`
-essai/appli/src/page.html       clic, double, droit, change, defile ; cible, roulette, case lente, case fugace,
-                                retarder ; le cadre nommé et focalisable
+essai/appli/src/main.rs         --couleur, --au-dessus, --position, --taille, --proprietaire ; la ligne `gel`
+essai/appli/src/page.html       clic, double, droit, change, defile ; cible, roulette, inerte, case lente, case
+                                fugace, retarder ; le cadre nommé et focalisable
 .github/workflows/ci.yml        l'artefact ; les délais
 docs/decisions/0005-…, 0006-…   amendés
 docs/registre.md                LE-1 et LE-2
@@ -612,11 +708,15 @@ CLAUDE.md                       l'état
   ```rust
   // tests/statique.rs
   const MOTS_DE_LANCEMENT: &[&str] = &["CARGO_BIN_EXE", "Command::new", "std::process", "spawn", "CreateProcess", "ShellExecute"];
-  /// Refusés dans `src/`, préfixes bornés à gauche : le jeton de la décision 14 vit dans les essais ; la valeur
-  /// ne passe jamais par le cache, ni par le motif LegacyIAccessible, qui la porte aussi.
-  const MOTS_DU_JETON_ET_DU_CACHE: &[&str] = &["CreateRestrictedToken", "CreateProcessAsUser", "SetTokenInformation",
+  /// Refusés dans `src/`, préfixes bornés à gauche : le jeton restreint vit dans les essais (ADR-0005, « Le niveau
+  /// d'intégrité se juge par comparaison ») ; la valeur ne passe jamais par le cache, ni par les motifs
+  /// LegacyIAccessible et Text, qui la portent aussi. Une tranche qui aurait besoin du motif Text ne lève la règle
+  /// qu'avec un marquage relu juste avant (`CurrentIsPassword`), jugé dans le domaine et testé.
+  const MOTS_DU_JETON_ET_DES_VALEURS: &[&str] = &["CreateRestrictedToken", "CreateProcessAsUser", "SetTokenInformation",
       "UIA_ValueValuePropertyId", "UIA_LegacyIAccessibleValuePropertyId", "UIA_LegacyIAccessiblePatternId",
-      "IUIAutomationLegacyIAccessiblePattern"];
+      "IUIAutomationLegacyIAccessiblePattern", "UIA_TextPatternId", "UIA_TextPattern2Id", "UIA_TextEditPatternId",
+      "UIA_TextChildPatternId", "IUIAutomationTextPattern", "IUIAutomationTextEditPattern",
+      "IUIAutomationTextChildPattern", "IUIAutomationTextRange"];
   /// Le seul fichier qui appelle `ToUnicodeEx`, et la marque de l'octet bas.
   const CLAVIER: &str = "src/bureau/clavier.rs"; const OCTET_BAS: &str = "OCTET_BAS";
   fn fautes_de_la_ligne_de_test(chemin: &str, numero: usize, ligne: &str) -> Option<String>;
@@ -631,7 +731,7 @@ CLAUDE.md                       l'état
       refuse("tests/essais_x.rs", "let _ = CreateProcessW(None, …);", "tests/essais_x.rs:1 contient « CreateProcess »");
       refuse("tests/essais_x.rs", "ShellExecuteExW(&mut info);", "tests/essais_x.rs:1 contient « ShellExecute »");
       admet("tests/commun/mod.rs", "CreateProcessAsUserW(…);"); }
-  #[test] fn refuse_le_jeton_et_la_valeur_en_cache_dans_src() { for mot in MOTS_DU_JETON_ET_DU_CACHE {
+  #[test] fn refuse_le_jeton_et_les_chemins_de_la_valeur_dans_src() { for mot in MOTS_DU_JETON_ET_DES_VALEURS {
       refuse("src/bureau/x.rs", &format!("let _ = {mot}W(…);"), &format!("src/bureau/x.rs:1 contient « {mot} »")); }
       admet("tests/commun/mod.rs", "CreateRestrictedToken(…); SetTokenInformation(…);"); }
   #[test] fn refuse_un_test_hors_de_la_tete_de_ligne() {
@@ -650,29 +750,38 @@ CLAUDE.md                       l'état
       admet("src/bureau/clavier.rs", "use windows::Win32::UI::Input::KeyboardAndMouse::ToUnicodeEx;"); }
   ```
   `chaque_mot_de_lancement_a_sa_plantation` couvre les deux mots ajoutés. Ajouter
-  `chaque_mot_du_jeton_et_du_cache_a_sa_plantation`, sur le modèle de `chaque_mot_refuse_a_sa_plantation`.
+  `chaque_mot_du_jeton_et_des_valeurs_a_sa_plantation`, sur le modèle de `chaque_mot_refuse_a_sa_plantation`, qui
+  plante chacun des quinze mots, `IUIAutomationTextPattern2` et `IUIAutomationTextRangeArray` compris, couverts par
+  leur préfixe.
 - [ ] **Étape 2 : voir rouge** : `cargo test --test statique`.
-- [ ] **Étape 3 : les règles.** Dans `mots_refuses`, `MOTS_DU_JETON_ET_DU_CACHE` pour tout chemin qui commence par
+- [ ] **Étape 3 : les règles.** Dans `mots_refuses`, `MOTS_DU_JETON_ET_DES_VALEURS` pour tout chemin qui commence par
   `src/`. `fautes_de_la_ligne_de_test` : une ligne qui porte `#[test]` sans que son début, blancs ôtés, le soit, hors
   de `STATIQUE`. `fautes_de_to_unicode_ex` : chaque ligne qui porte `ToUnicodeEx(` (avec la parenthèse), hors de
   `STATIQUE` ; hors de `CLAVIER`, faute ; dans `CLAVIER`, faute si ni elle ni ses trois suivantes ne portent
   `OCTET_BAS`. Le commentaire d'en-tête du fichier dit les quatre règles.
 - [ ] **Étape 4 : voir vert** : `cargo test --test statique`, `sources_respectent_les_regles` compris.
 - [ ] **Étape 5 : COM en MTA, l'AUMID sur un fil neuf.** `src/lib.rs` : `COINIT_MULTITHREADED` ; le commentaire dit
-  que le client de l'automatisation vit sous le MTA. `src/bureau/fenetres.rs` : `aumid` passe la fenêtre (sa valeur
-  entière, un `HWND` n'étant pas `Send`) à un fil neuf (`thread::Builder::spawn`), qui appelle
-  `CoInitializeEx(None, COINIT_APARTMENTTHREADED)`, lit l'AUMID comme aujourd'hui, appelle `CoUninitialize` si
-  l'initialisation a réussi, et rend sa lecture par `join` ; un fil qui ne naît pas, ou qui panique, rend `None`. Le
-  commentaire dit pourquoi (décision 2), et qu'un AUMID illisible vaut `None`, que le domaine juge.
+  que le client de l'automatisation vit sous le MTA. `src/bureau/fenetres.rs` : `fenetres()` relève d'abord les HWND
+  d'`EnumWindows`, puis passe leurs valeurs entières (un `HWND` n'étant pas `Send`) à un seul fil neuf
+  (`thread::Builder::spawn`), qui appelle `CoInitializeEx(None, COINIT_APARTMENTTHREADED)`, lit l'AUMID de chacune
+  comme aujourd'hui, appelle `CoUninitialize` si l'initialisation a réussi, et rend un `Vec<Option<String>>` par
+  `join` ; un fil qui ne naît pas, ou qui panique, rend `None` pour chaque fenêtre. Le commentaire dit pourquoi,
+  d'après la décision 2, renvoie à ADR-0005 (la puce de COM), et dit qu'un AUMID illisible vaut `None`, que le
+  domaine juge.
 - [ ] **Étape 6 : les renvois.** Chaque « (décision N) » d'un commentaire de `src/`, `tests/` et `essai/` devient le
   renvoi à la section d'ADR qui porte la règle (`ADR-0005, « Le niveau d'intégrité »`), ou, à défaut, à
-  `CLAUDE.md` ; `git grep -n "décision [0-9]" -- src tests essai` ne rend rien, sauf une citation d'un plan dans
-  `tests/statique.rs` qui dit pourquoi elle reste.
+  `CLAUDE.md` ; `git grep -n "décision [0-9]" -- src tests essai` ne rend rien. La citation « décision 13 du plan
+  maître », dans les en-têtes de `tests/statique.rs` (que l'étape 3 réécrit) et de `tests/commun/mod.rs`, renvoie
+  elle aussi à `CLAUDE.md`, qui dit la règle (« la CI seule les lance ») : le plan maître disparaît à la clôture du
+  lot. Les blocs de code de ce plan n'en écrivent aucun : chaque doc-commentaire qu'ils donnent renvoie à une
+  section d'ADR, et aucun nom de test ne nomme une décision.
 - [ ] **Étape 7 : ADR-0005**, premier amendement (décision 1) : la ligne `- **Amendé** le <date> : tranche 2 du lot
-  1 — COM en MTA` ; la puce `CoInitializeEx(COINIT_APARTMENTTHREADED)` dit le MTA, l'AUMID lu sur un fil neuf en
-  STA, et la limite d'un AUMID d'une autre application que rien n'éprouve en CI ; la section `## Confirmation` naît,
-  avec `tests/statique.rs` pour « Aucun `SetValue` » et pour la valeur hors du cache et du motif LegacyIAccessible ;
-  la sous-section `### Ce que la tranche 2 précise ou change` naît, avec ce point.
+  1 — COM en MTA` ; la puce `CoInitializeEx(COINIT_APARTMENTTHREADED)` dit le MTA, les AUMID lus sur un fil neuf en
+  STA, un par énumération, et la limite d'un AUMID d'une autre application que rien n'éprouve en CI ; « Les valeurs
+  secrètes ne sortent jamais » gagne la règle : aucune valeur ne passe par le cache de l'automatisation, ni par les
+  motifs LegacyIAccessible et Text, dont le contrôle statique refuse les noms dans `src/` ; la section
+  `## Confirmation` naît, avec `tests/statique.rs` pour « Aucun `SetValue` » et pour cette règle ; la sous-section
+  `### Ce que la tranche 2 précise ou change` naît, avec ces points.
 - [ ] **Étape 8 : LE-2.** Son critère de sortie : « la règle `ToUnicodeEx` de `tests/statique.rs` : un appel hors de
   `src/bureau/clavier.rs`, ou sans `OCTET_BAS` dans les trois lignes qui le suivent, fait échouer
   `sources_respectent_les_regles` » ; son état : « clos ».
@@ -760,10 +869,12 @@ CLAUDE.md                       l'état
   // element.rs
   /// Un élément lu. Chaque `Option` d'un motif est `Some` si et seulement si l'élément offre ce motif : `coche`,
   /// Toggle ; `choisi`, SelectionItem ; `deplie`, ExpandCollapse ; `lecture_seule`, Value (la ligne ne porte
-  /// `valeur` que pour lui) ; `defile`, Scroll ; et `invocable`, Invoke.
+  /// `valeur` que pour lui) ; `defile`, Scroll ; et `invocable`, Invoke. `fenetre` : l'élément est une fenêtre (un
+  /// HWND natif non nul). `hors` : écarté par `borner`, jamais posé par la couche.
   #[derive(Clone, Debug, PartialEq, Default)]
   pub struct ElementLu { pub parent: Option<usize>, pub genre: i32, pub nom: String, pub id: String, pub classe: String,
       pub raccourci: String, pub acces: String, pub annonce: i32, pub motdepasse: bool, pub actif: bool, pub pid: u32,
+      pub fenetre: bool, pub hors: bool,
       pub coche: Option<i32>, pub deplie: Option<i32>, pub choisi: Option<bool>, pub lecture_seule: Option<bool>,
       pub defile: Option<Defile>, pub invocable: bool }
   #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)] pub struct Defile { pub vertical: bool, pub horizontal: bool }
@@ -786,11 +897,20 @@ CLAUDE.md                       l'état
   pub fn profondeur(arbre: &[ElementLu], i: usize) -> usize;
   pub fn etats(e: &ElementLu) -> Vec<&'static str>;
   pub fn dans_de(arbre: &[ElementLu], i: usize) -> Option<&str>;
+  /// Pose `hors` sur chaque élément, hors de la racine, qui est une fenêtre et dont `admis` refuse le processus, et
+  /// sur tout son sous-arbre (ADR-0005, « Ce qu'on lit reste dans la fenêtre retenue »).
+  pub fn borner(arbre: &mut [ElementLu], admis: impl Fn(u32) -> bool);
   pub fn document_vide(arbre: &[ElementLu]) -> bool;
   pub fn ligne_d_element(arbre: &[ElementLu], i: usize, valeur: Option<&str>, dans: bool, rang: Option<usize>) -> Ligne;
   pub fn arret_uia(e: &ErreurUia) -> Arret;
-  #[cfg(test)] pub(crate) mod essai { pub fn e(parent: Option<usize>, genre: i32, nom: &str) -> ElementLu; pub fn arbre_d_essai() -> Vec<ElementLu>; }
+  #[cfg(test)] pub(crate) mod essai { pub fn e(parent: Option<usize>, genre: i32, nom: &str) -> ElementLu;
+      pub fn arbre_d_essai() -> Vec<ElementLu>;
+      /// `[Window « Appli d'essai », Pane sans nom, Document sans nom ni enfant]`.
+      pub fn vide() -> Vec<ElementLu>; }
   ```
+  Chaque fonction de `element` traite un élément `hors` comme absent : `ancetres` et `profondeur` mis à part, qui ne
+  jugent rien. Chaque aide d'`essai` sert dès cette tâche (`vide()` dans `document_vide_regle`) : une aide sans
+  emploi ferait échouer `cargo clippy … -D warnings` (`dead_code`).
   `arbre_d_essai()`, que les tâches suivantes réemploient par ses indices (pid 100, `actif` vrai partout) :
 
   | i | parent | type | nom | id | le reste |
@@ -836,14 +956,29 @@ CLAUDE.md                       l'état
   #[test] fn etats_dans_l_ordre() { /* coche 0 → ["decoche"] ; 2 → ["indetermine"] ; choisi Some(true) et actif faux →
       ["choisi", "inactif"] ; deplie 1 ou 2 → ["deplie"], 0 → ["replie"], 3 → [] ; lecture_seule Some(true) →
       ["lecture-seule"] ; tout ensemble, dans l'ordre d'ADR-0006 */ }
-  #[test] fn dans_nomme_le_groupe_le_plus_proche() { let a = arbre_d_essai();
+  #[test] fn dans_nomme_le_groupe_le_plus_proche() { let mut a = arbre_d_essai();
       assert_eq!(dans_de(&a, 16), Some("Options")); assert_eq!(dans_de(&a, 8), Some("Couleur")); assert_eq!(dans_de(&a, 4), None);
+      assert_eq!(ancetres(&a, 16), vec![15, 13, 2, 1, 0]); assert_eq!(profondeur(&a, 16), 5); assert_eq!(profondeur(&a, 0), 0);
+      a.push(e(Some(2), FENETRE, "Dialogue")); a.push(e(Some(19), 50_000, "Fermer"));   // un dialogue dans l'arbre de W
+      assert_eq!(dans_de(&a, 20), None);
       /* un élément sous une List nommée « Lignes », elle-même sous un Group sans nom : Some("Lignes") */ }
-  #[test] fn document_vide_regle() { /* [Window, Pane, Document sans enfant] : vrai ; [Window, TitleBar, Button sous la
+  #[test] fn document_vide_regle() { /* document_vide(&vide()) : vrai ; [Window, TitleBar, Button sous la
       TitleBar] : vrai ; [Window, Button] : faux ; arbre_d_essai() : faux ; [Window, Pane, Document, Custom] : faux ;
       [Window, Pane, Document, Button (parent 2), Document sans enfant (parent 2)] : faux, le Document vide n'étant pas
       celui de la page ; [Window, Pane, Document sans enfant, Document (parent 1), Button (parent 3)] : vrai, le premier
-      Document le plus extérieur étant vide */ }
+      Document le plus extérieur étant vide ; [Window, Window « Dialogue » (parent 0), Document (parent 1), Button
+      (parent 2), Pane (parent 0), Document sans enfant (parent 4)] : vrai, le Document d'un dialogue n'étant pas celui
+      de la page ; arbre_d_essai() dont les éléments 2 à 18 sont `hors` : vrai, rien d'écarté ne comptant */ }
+  #[test] fn borner_ecarte_une_fenetre_d_un_processus_non_admis() { let mut a = arbre_d_essai();
+      a.push(ElementLu { fenetre: true, pid: 300, ..e(Some(0), FENETRE, "Invite") });            // 19, une fenêtre possédée
+      a.push(ElementLu { pid: 300, lecture_seule: Some(false), id: "secret".into(), ..e(Some(19), 50_004, "Secret") });
+      a.push(ElementLu { fenetre: true, pid: 400, ..e(Some(1), FENETRE, "Contenu") });            // 21, une fenêtre fille
+      a.push(ElementLu { pid: 300, ..e(Some(1), 50_020, "Texte") });   // 22, pas une fenêtre : son processus ne se juge pas
+      a[1].fenetre = true;                                    // le Pane de W, une fenêtre de P : jamais écarté
+      borner(&mut a, |pid| pid == 100 || pid == 400);
+      assert!(a[19].hors && a[20].hors); assert!(!a[21].hors && !a[22].hors && !a[1].hors && !a[0].hors);
+      assert!((0..19).all(|i| !a[i].hors));
+      let mut r = arbre_d_essai(); r[0].fenetre = true; r[0].pid = 300; borner(&mut r, |_| false); assert!(!r[0].hors); }  // jamais la racine
   #[test] fn arret_uia_classe_les_codes() { let e = |code| ErreurUia { code, texte: "Invoke : 0x80004005".into() };
       for c in [UIA_DISPARU, RPC_DECONNECTE, OBJET_DECONNECTE] { assert_eq!(arret_uia(&e(c)), Arret::Introuvable("l'élément a disparu".into())); }
       assert_eq!(arret_uia(&e(UIA_DELAI)), Arret::Echec("échec du système : délai de l'automatisation dépassé".into()));
@@ -853,8 +988,8 @@ CLAUDE.md                       l'état
   ```
 - [ ] **Étape 2 : voir rouge** : `cargo test --lib -- domaine::element domaine::sortie`.
 - [ ] **Étape 3 : le code**, `element.rs` et `Issue::avis` ; `mod.rs` déclare `element`. `document_vide` suit la
-  décision 6 ; `dans_de` cherche le plus proche ancêtre nommé de type `Group`, sinon le plus proche ancêtre nommé,
-  ni l'un ni l'autre n'étant la racine, ni de type `Window` ou `Document`.
+  décision 6 ; `borner`, la décision 4 ; `dans_de` cherche le plus proche ancêtre nommé de type `Group`, sinon le plus
+  proche ancêtre nommé, ni l'un ni l'autre n'étant la racine, ni de type `Window` ou `Document`.
 - [ ] **Étape 4 : voir vert**, puis `cargo mutants -p pilote -F '^src/domaine/element\.rs:'` et
   `-F '^src/domaine/sortie\.rs:'`.
 - [ ] **Étape 5 : commit** : `git add src/domaine/element.rs src/domaine/sortie.rs src/domaine/mod.rs`, puis
@@ -866,7 +1001,8 @@ CLAUDE.md                       l'état
 `Cargo.lock`, ADR-0006.
 
 **Interfaces :**
-- Consomme : `ElementLu`, `type_de_nom`, `ancetres`, `essai::arbre_d_essai` (Tâche 3) ; `Selecteur`, `Arret`.
+- Consomme : `ElementLu`, `type_de_nom`, `ancetres`, `FENETRE`, `essai::{e, arbre_d_essai}` (Tâche 3) ; `Selecteur`,
+  `Arret`. Chaque fonction du sélecteur traite un élément `hors` comme absent.
 - Produit :
   ```rust
   /// NFC, puis U+00A0, U+202F et U+2007 en U+0020.
@@ -905,17 +1041,24 @@ CLAUDE.md                       l'état
       let appli = Selecteur { dans: Some("Appli d'essai".into()), ..Default::default() };
       assert!(candidats(&a, &appli).is_empty());   // W et le Document portent ce nom : aucun ne compte
       a[0].nom = "Essai".into(); a[2].nom = "Essai".into(); assert!(candidats(&a, &sel("--dans Essai")).is_empty());
-      a[1].nom = "Essai".into(); assert_eq!(candidats(&a, &sel("--dans Essai")), (2..=18).collect::<Vec<_>>()); }  // le témoin : le Pane compte
-  #[test] fn candidats_excluent_la_racine() { assert_eq!(candidats(&arbre_d_essai(), &sel("--contient Appli")), vec![2]); }
+      a[1].nom = "Essai".into(); assert_eq!(candidats(&a, &sel("--dans Essai")), (2..=18).collect::<Vec<_>>());  // le témoin : le Pane compte
+      a.push(e(Some(2), FENETRE, "Dialogue")); a.push(e(Some(19), 50_000, "Fermer"));   // 19, 20 : un dialogue dans W
+      assert!(candidats(&a, &sel("--dans Dialogue")).is_empty()); }   // un ancêtre Window ne compte pas
+  #[test] fn candidats_excluent_la_racine_et_les_ecartes() { let mut a = arbre_d_essai();
+      assert_eq!(candidats(&a, &sel("--contient Appli")), vec![2]);
+      a[4].hors = true; assert!(candidats(&a, &sel("--id champ")).is_empty()); }
   #[test] fn choisir_un_refuse_l_ambiguite_et_le_rang_au_dela() { let a = arbre_d_essai();
+      assert_eq!(choisir_un(&a, &sel("--id champ")), Ok(4));   // un candidat unique, sans --rang
       assert_eq!(choisir_un(&a, &sel("--nom Toutes")), Err(Arret::Introuvable("plusieurs éléments répondent au sélecteur : 3 ; --rang départage".into())));
       assert_eq!(choisir_un(&a, &sel("--nom Toutes --rang 3")), Ok(12));
       assert_eq!(choisir_un(&a, &sel("--nom Toutes --rang 4")), Err(Arret::Introuvable("aucun élément au rang 4 : 3 candidats".into())));
       assert_eq!(choisir_un(&a, &sel("--nom Rien")), Err(Arret::Introuvable("aucun élément ne répond au sélecteur".into()))); }
-  #[test] fn sous_arbres_les_plus_exterieurs() { assert_eq!(sous_arbres(&arbre_d_essai(), "Options"), vec![13]); }
+  #[test] fn sous_arbres_les_plus_exterieurs() { let mut a = arbre_d_essai(); assert_eq!(sous_arbres(&a, "Options"), vec![13]);
+      a.push(e(Some(2), FENETRE, "Dialogue")); a.push(e(Some(19), 50_000, "Fermer")); assert!(sous_arbres(&a, "Dialogue").is_empty()); }
   #[test] fn selecteur_vide_et_type_inconnu() {
       assert_eq!(analyser_le_selecteur(&Selecteur::default(), true), Err(Arret::Usage("sélecteur vide : --nom, --contient, --type, --id, --classe ou --dans".into())));
       assert_eq!(analyser_le_selecteur(&Selecteur::default(), false), Ok(()));
+      assert_eq!(analyser_le_selecteur(&sel("--id x"), true), Ok(()));
       assert_eq!(analyser_le_selecteur(&Selecteur { rang: Some(2), ..Default::default() }, true).is_err(), true);
       assert_eq!(analyser_le_selecteur(&sel("--type Bouton"), false), Err(Arret::Usage("type inconnu : Bouton".into()))); }
   // cli.rs
@@ -974,10 +1117,12 @@ ADR-0006.
   pub trait Bureau: Disposition { /* … les 20 méthodes de la tranche 1, `verr_maj` changée : */
       /// Verr. Maj allumée, ou `None` si son état ne se lit pas : le domaine refuse alors.
       fn verr_maj(&mut self) -> Option<bool>;
-      /* puis quatorze méthodes nouvelles : */
+      /* puis quinze méthodes nouvelles : */
       fn ouvrir_l_automatisation(&mut self, delais: DelaisUia) -> Result<(), ErreurUia>;
       fn lire_l_arbre(&mut self, f: IdFenetre) -> Result<Vec<ElementLu>, ErreurUia>;
       fn lire_le_focus(&mut self) -> Result<Option<FocusLu>, ErreurUia>;
+      /// Le marquage courant de l'élément `i` (`CurrentIsPassword`) : une erreur, jamais `false` par défaut.
+      fn relire_le_marquage(&mut self, i: usize) -> Result<bool, ErreurUia>;
       fn lire_la_valeur(&mut self, i: usize) -> Result<String, ErreurUia>;
       fn relire_l_etat(&mut self, i: usize) -> Result<EtatLu, ErreurUia>;
       fn agir(&mut self, i: usize, geste: GesteUia) -> Result<(), ErreurUia>;
@@ -993,25 +1138,34 @@ ADR-0006.
       fn sensible_au_dpi(&mut self) -> bool;
   }
   // faux.rs : AppelFaux gagne
-  OuvrirUia(DelaisUia), LireArbre(IdFenetre), LireFocus, LireValeur(usize), RelireEtat(usize), Agir(usize, GesteUia),
-  Repond(IdFenetre, Duree), Capturer(IdFenetre), Ecrire(PathBuf), ZoneCliente(IdFenetre), FenetreSous(Point), BureauVirtuel,
-  BoutonsInverses, SensibleAuDpi
+  OuvrirUia(DelaisUia), LireArbre(IdFenetre), LireFocus, RelireMarquage(usize), LireValeur(usize), RelireEtat(usize),
+  Agir(usize, GesteUia), Repond(IdFenetre, Duree), Capturer(IdFenetre), Ecrire(PathBuf), ZoneCliente(IdFenetre),
+  FenetreSous(Point), BureauVirtuel, BoutonsInverses, SensibleAuDpi
+  // faux.rs
+  /// 10 × 8, décrite plus bas.
+  pub(crate) fn image_d_essai() -> Image;
   // gestes.rs
-  #[cfg(test)] pub(crate) mod essai { pub(crate) fn x(b: &mut FauxBureau, s: &str) -> Issue;
+  #[cfg(test)] pub(crate) mod essai { /// Exécute la commande, puis vérifie que le faux n'a pas vu l'ordre rompu.
+      pub(crate) fn x(b: &mut FauxBureau, s: &str) -> Issue;
       pub(crate) fn aucun_geste(b: &FauxBureau) -> bool; pub(crate) fn gestes(b: &FauxBureau) -> Vec<AppelFaux>;
       pub(crate) fn appele(b: &FauxBureau, quoi: fn(&AppelFaux) -> bool) -> bool;
       pub(crate) fn compte(b: &FauxBureau, appel: &AppelFaux) -> usize; pub(crate) fn ecoule(b: &FauxBureau) -> u64;
-      /// Vrai si chaque `Envoi` et chaque `Agir` suit exactement `[PremierPlan, Processus, PremierPlan]`, et s'il y en
+      /// Le poste de la tranche 1 : explorer (50), qui a lancé KeePassXC (60), retiré de `gestes::tests`.
+      pub(crate) fn avec_keepassxc_par_explorer() -> FauxBureau;
+      /// Vrai si chaque `Envoi` et chaque `Agir` suit exactement `[PremierPlan, Processus, PremierPlan]`, ou
+      /// `[PremierPlan, Processus, PremierPlan, <lectures sans Processus ni PremierPlan>, PremierPlan]`, et s'il y en
       /// a au moins un : pour un geste sans activation ni insertion partielle, le premier plan déjà accepté.
       pub(crate) fn premier_plan_juste_avant(b: &FauxBureau) -> bool; }
   ```
   `aucun_geste` compte aussi `Agir` parmi les gestes. Les tests de `gestes.rs` les importent de `essai`, et ne les
-  redéfinissent plus ; `premier_plan_verifie_avant_chaque_unite` s'écrit par `premier_plan_juste_avant`.
+  redéfinissent plus ; `premier_plan_verifie_avant_chaque_unite` s'écrit par `premier_plan_juste_avant`. `x` finit
+  par `assert!(!b.ordre_rompu, "lecture de l'automatisation avant son ouverture")`.
   `FauxBureau` gagne, par champ public : `arbres: VecDeque<Vec<ElementLu>>`, `focus: VecDeque<Result<Option<FocusLu>,
   ErreurUia>>`, `valeurs: BTreeMap<usize, VecDeque<String>>`, `etats: VecDeque<EtatLu>` et `zones:
   VecDeque<Option<Rect>>` (chaque lecture prend la tête tant qu'il en reste plus d'une, puis rend la dernière, à
-  chaque fois) ; `erreur_ouverture`, `erreur_arbre`, `erreur_valeur`, `erreur_etat`, `erreur_agir: Option<ErreurUia>` ;
-  `repond: bool` ; `image: Result<Image, ErreurSysteme>` ; `ecrits: Vec<(PathBuf, Vec<u8>)>` et `ecriture_ratee: bool` ;
+  chaque fois) ; `masquees: BTreeSet<usize>` (les indices que `relire_le_marquage` dit marqués) ; `erreur_ouverture`,
+  `erreur_arbre`, `erreur_marquage`, `erreur_valeur`, `erreur_etat`, `erreur_agir: Option<ErreurUia>` ; `ordre_rompu:
+  bool` ; `repond: bool` ; `image: Result<Image, ErreurSysteme>` ; `ecrits: Vec<(PathBuf, Vec<u8>)>` et `ecriture_ratee: bool` ;
   `sous_le_point: Option<PremierPlan>` ; `virtuel: Rect` ; `inverses: bool` ; `dpi_par_ecran: bool` ; `niveaux:
   Vec<(u32, Option<u32>)>` (le niveau d'un PID, consulté avant `niveau_cible`) ; les vols, chacun le premier plan qui
   passe à cette fenêtre juste après le n-ième appel : `vol_apres_l_arbre`, `vol_apres_le_focus`, `vol_apres_agir:
@@ -1023,8 +1177,9 @@ ADR-0006.
   vrai, le reste vide, faux ou absent. `image_d_essai()` : 10 × 8, chaque pixel `[10, 20, 30, 0]` sauf (2, 3) `[0, 0,
   255, 0]`, `fenetre` `Rect { x: 100, y: 100, largeur: 10, hauteur: 8 }`, `cadre` `Some(Rect { x: 101, y: 100, largeur:
   8, hauteur: 7 })`, `client` `Some(Rect { x: 102, y: 102, largeur: 6, hauteur: 4 })`. Chaque lecture de
-  l'automatisation (`lire_l_arbre`, `lire_le_focus`, `lire_la_valeur`, `relire_l_etat`, `agir`) panique si
-  `ouvrir_l_automatisation` n'a pas réussi avant elle. `agir` enregistre son appel, puis rend `erreur_agir`.
+  l'automatisation (`lire_l_arbre`, `lire_le_focus`, `relire_le_marquage`, `lire_la_valeur`, `relire_l_etat`,
+  `agir`) pose `ordre_rompu`, puis panique, si `ouvrir_l_automatisation` n'a pas réussi avant elle. `agir` enregistre
+  son appel, puis rend `erreur_agir` ; chaque autre lecture rend son erreur si elle est posée.
   `BureauWindows` réalise chaque méthode nouvelle par un provisoire qui rend l'échec (`ErreurUia { code: 0x8000_4001,
   texte: "pas encore réalisé" }`, `ErreurSysteme`, `false`, `None`, un `Rect` nul), et `verr_maj` par `Some` de la
   lecture d'aujourd'hui : la Tâche 11 les remplace tous.
@@ -1033,8 +1188,11 @@ ADR-0006.
 - [ ] **Étape 1 : les tests, rouges.**
   ```rust
   // faux.rs
-  #[test] fn lecture_avant_l_ouverture_panique() { let r = std::panic::catch_unwind(|| {
-      let mut b = FauxBureau::avec_appli(); let _ = b.lire_l_arbre(IdFenetre(1)); }); assert!(r.is_err()); }
+  #[test] fn lecture_avant_l_ouverture_panique() { let mut b = FauxBureau::avec_appli();
+      let r = catch_unwind(AssertUnwindSafe(|| { let _ = b.lire_l_arbre(IdFenetre(1)); }));
+      assert!(r.is_err()); assert!(b.ordre_rompu); }
+  #[test] fn marquage_relu() { /* après l'ouverture, masquees {4} : relire_le_marquage(4) rend Ok(true), (3) Ok(false),
+      RelireMarquage(4) noté ; erreur_marquage Some(e) : Err(e) */ }
   #[test] fn arbres_successifs_puis_le_dernier() { /* arbres [a, b] : trois lectures rendent a, b, b ; trois LireArbre */ }
   #[test] fn etats_et_zones_successifs_puis_le_dernier() { /* etats [x, y] : relire rend x, y, y ; zones [Some(z1),
       Some(z2)] : zone_cliente rend z1, z2, z2 */ }
@@ -1051,9 +1209,10 @@ ADR-0006.
       → Refus « Verr. Maj illisible », aucun geste ; sans --comme-au-clavier, Fait */ }
   ```
 - [ ] **Étape 2 : voir rouge** : `cargo test --lib -- domaine::faux domaine::gestes`.
-- [ ] **Étape 3 : le code** : le trait, les types, le faux, le module `essai` de `gestes.rs` et Verr. Maj illisible,
-  les provisoires de `BureauWindows` ; « (décision N) » remplacé dans `bureau.rs` s'il en reste. `cargo build -p
-  pilote` passe sous Windows.
+- [ ] **Étape 3 : le code** : le trait, les types, le faux, le module `essai` de `gestes.rs` (où passe
+  `avec_keepassxc_par_explorer`, retiré de `gestes::tests`) et Verr. Maj illisible, les provisoires de
+  `BureauWindows` ; « (décision N) » remplacé dans `bureau.rs` s'il en reste. `cargo build -p pilote` passe sous
+  Windows.
 - [ ] **Étape 4 : voir vert** : `cargo test --workspace`, puis `cargo mutants -p pilote -F '^src/domaine/gestes\.rs:'`.
 - [ ] **Étape 5 : les ADR.** ADR-0005, « Les gestes et l'ordre des gardes », position 8 : Verr. Maj allumée ou
   illisible (1). ADR-0006 : « Verr. Maj illisible » dans « Les messages », et au 1 de « Les codes de sortie ».
@@ -1064,13 +1223,17 @@ ADR-0006.
 
 ### Tâche 6 : les lectures — focus, arbre, trouver, valeur et defilables
 
-**Fichiers :** créer `src/domaine/lectures.rs` ; modifier `src/domaine/gestes.rs` (`Travail`, `Suivi`, `sonder`,
-`lire_fenetres_et_processus`, `echec`, `echec_systeme`, les deux essais de « pas encore livrée »),
-`src/domaine/mod.rs`, ADR-0005, ADR-0006.
+**Fichiers :** créer `src/domaine/lectures.rs` ; modifier `src/domaine/gestes.rs` (`Travail`, `Suivi`, `Journal`,
+`sonder`, `premier_plan_accepte` et `premier_plan_et_instantane`, `lire_fenetres_et_processus`, `echec`,
+`echec_systeme`, `essai::possedee`, les deux essais de « pas encore livrée »), `src/domaine/mod.rs`, ADR-0005,
+ADR-0006.
 
 **Interfaces :**
-- Consomme : Tâches 3 à 5, dont les aides de `gestes::essai` ; `retenir`, `premier_plan_accepte`, `sonder`, `Suivi`,
-  `lire_fenetres_et_processus`, `echec`, `echec_systeme`, que cette tâche passe en `pub(crate)`.
+- Consomme : Tâches 3 à 5, dont `borner`, `element::essai::{arbre_d_essai, vide}` et les aides de `gestes::essai` ;
+  `retenir` ; `sonder`, `Suivi`, `Journal`, `lire_fenetres_et_processus`, `echec`, `echec_systeme`, que cette tâche
+  passe en `pub(crate)` (`Journal` avec eux : un champ `pub(crate)` de `Suivi` d'un type privé ferait échouer
+  `clippy -D warnings`, par `private_interfaces`) ; `premier_plan_accepte`, dont elle tire
+  `premier_plan_et_instantane` ; `accepte`, `arbre`, `processus_de`, `processus_refuse`, `est_keepassxc`.
 - Produit :
   ```rust
   // lectures.rs
@@ -1085,27 +1248,45 @@ ADR-0006.
   pub(crate) fn lire(l: &Lecture, s: &mut Suivi, b: &mut dyn Bureau) -> Result<Issue, Arret>;
   /// La réponse de W (3), puis l'ouverture de l'automatisation avec `DELAIS`.
   pub(crate) fn ouvrir(w: IdFenetre, b: &mut dyn Bureau) -> Result<(), Arret>;
-  /// L'arbre de `f`, relu toutes les `SONDE` tant qu'il est vide et que `fin` n'est pas passée, puis tel quel.
-  pub(crate) fn lire_l_arbre(f: IdFenetre, fin: Moment, b: &mut dyn Bureau) -> Result<Vec<ElementLu>, Arret>;
+  /// Les processus qu'une fenêtre de l'arbre lu peut avoir sans être écartée (ADR-0005, « Ce qu'on lit reste dans
+  /// la fenêtre retenue ») : P et celui de chaque fenêtre enfant de W, sans autre condition (la retenue les a
+  /// jugés) ; un autre processus, s'il est de l'arbre de P, à la retenue comme sur `tous`, ni refusé ni KeePassXC.
+  pub(crate) fn admis<'a>(r: &'a Retenue, tous: &'a [Processus]) -> impl Fn(u32) -> bool + 'a;
+  /// L'arbre de `f`, borné par `admis`, relu toutes les `SONDE` tant qu'il est vide et que `fin` n'est pas passée,
+  /// puis tel quel. Toute lecture de l'arbre du domaine passe par elle.
+  pub(crate) fn lire_l_arbre(f: IdFenetre, fin: Moment, admis: &dyn Fn(u32) -> bool, b: &mut dyn Bureau)
+      -> Result<Vec<ElementLu>, Arret>;
   /// `essai` tout de suite, puis toutes les `SONDE` tant que `fin` n'est pas passée : `Err` arrête, `Ok(Err(a))` se
   /// rejoue, et sort avec `a` à `fin` ; `Ok(Ok(v))` rend `v`.
   pub(crate) fn attendre_que<T>(fin: Moment, b: &mut dyn Bureau,
       essai: impl FnMut(&mut dyn Bureau) -> Result<Result<T, Arret>, Arret>) -> Result<T, Arret>;
-  /// La ligne de l'élément `i`, sa valeur lue s'il offre Value et n'est pas un mot de passe.
-  pub(crate) fn ligne(arbre: &[ElementLu], i: usize, dans: bool, rang: Option<usize>, b: &mut dyn Bureau) -> Result<String, Arret>;
+  /// La ligne de l'élément `i` ; s'il offre Value et n'est marqué ni en cache ni par `focus_marque`, son marquage
+  /// relu, puis, s'il ne l'est toujours pas, sa valeur.
+  pub(crate) fn ligne(arbre: &[ElementLu], i: usize, focus_marque: bool, dans: bool, rang: Option<usize>,
+      b: &mut dyn Bureau) -> Result<String, Arret>;
   // gestes.rs
   enum Travail { Lister, Geste { … }, Lecture(Lecture), PasEncoreLivree(&'static str) }
+  pub(crate) enum Journal { /* inchangé */ }
   pub(crate) struct Suivi { /* les champs de la tranche 1, pub(crate) */ }
-  pub(crate) fn sonder<T>(…);  pub(crate) fn premier_plan_accepte(…);
+  pub(crate) fn sonder<T>(…);
+  /// Le premier plan accepté pour `r`, avec l'instantané des processus qu'il a lu (ADR-0005, « Le premier plan
+  /// accepté ») : `premier_plan_accepte`, qui reste privée, le rend sans l'instantané.
+  pub(crate) fn premier_plan_et_instantane(r: &Retenue, b: &mut dyn Bureau) -> Result<Option<(PremierPlan, Vec<Processus>)>, Arret>;
   ```
   L'analyse (`analyser_le_travail`) juge, avant le journal : `focus --rang` (64) ; `analyser_le_selecteur(sel,
   false)` pour `focus` et `trouver`, `(sel, true)` pour `valeur`. Chaque lecture prend `debut = b.maintenant()` juste
-  avant sa première lecture de l'arbre ; la sonde se borne à `debut + max(DOCUMENT_VIDE_MAX, --attendre)`, les
-  reprises à `debut + --attendre` (aucune sans `--attendre`), et chaque reprise relit l'arbre par `lire_l_arbre`,
-  bornée à la même fin que la sonde (décision 6).
+  avant sa première lecture de l'arbre, et `focus`, dont le premier essai peut refuser le premier plan avant toute
+  lecture de l'arbre, juste avant ce premier essai ; la sonde se borne à `debut + max(DOCUMENT_VIDE_MAX,
+  --attendre)`, les reprises à `debut + --attendre` (aucune sans `--attendre`), et chaque reprise relit l'arbre par
+  `lire_l_arbre`, bornée à la même fin que la sonde (décision 6). Chaque lecture borne l'arbre par `admis(&r, &tous)`,
+  sur l'instantané de la retenue ; `focus`, qui juge le premier plan par `premier_plan_et_instantane`, sur
+  l'instantané que cette fonction rend avec lui.
 
-- [ ] **Étape 1 : les tests, rouges.** `vide()` rend `[Window « Appli d'essai », Pane sans nom, Document sans nom ni
-  enfant]`.
+- [ ] **Étape 1 : les tests, rouges.** `vide()` vient d'`element::essai` (Tâche 3). `possedee(b: &mut FauxBureau)`,
+  que cette tâche ajoute à `gestes::essai` pour la Tâche 9, ajoute au faux une fenêtre que W possède, d'un processus
+  300 hors de l'arbre de P : l'arbre lu devient `arbre_d_essai()`, plus une `Window` « Invite » (19 : parent 0, pid
+  300, `fenetre`), qui porte un `Edit` « Secret » (20 : pid 300, id `secret`, `lecture_seule: Some(false)`) et un
+  `Button` « OK » (21 : pid 300, id `ok`, `invocable`) ; `processus` gagne 300, de parent 0.
   ```rust
   #[test] fn arbre_rend_les_lignes_indentees() { let mut b = FauxBureau::avec_appli(); let i = x(&mut b, "arbre --fenetre appli-essai");
       assert_eq!(i.code, Code::Fait); assert_eq!(i.sortie.len(), 19); assert_eq!(i.sortie[0], "[Window] <Appli d'essai>");
@@ -1115,7 +1296,19 @@ ADR-0006.
       assert_eq!(i.sortie[16], "          [CheckBox] <Option interne> id=option-interne etat=decoche"); assert_eq!(i.erreur, None); }
   #[test] fn arbre_ne_lit_jamais_la_valeur_d_un_mot_de_passe() { /* après arbre : LireValeur(4) noté, LireValeur(5) jamais */ }
   #[test] fn arbre_coupe_le_dit_sur_la_sortie_d_erreur() { /* « arbre --max 3 » : Fait, 3 lignes, erreur Some("arbre coupé : 3
-      lignes sur 19") ; aucune LireValeur au-delà de la 3e ligne */ }
+      lignes sur 19") ; aucune LireValeur au-delà de la 3e ligne ; « --max 19 » : Fait, 19 lignes, erreur None ;
+      « --max 18 » : erreur Some("arbre coupé : 18 lignes sur 19") */ }
+  #[test] fn arbre_ecarte_une_fenetre_possedee_d_un_autre_processus() { /* possedee(b) : « arbre » en 0, 19 lignes, aucune
+      ne porte « Invite », « Secret » ni « OK » ; ni LireValeur(20) ni RelireMarquage(20) ; « trouver --id secret » :
+      Introuvable « aucun élément ne répond au sélecteur ». Le témoin : W porte pids_enfants [400], le processus 400
+      (parent 0) ; l'arbre gagne une Window « Contenu » (parent 1, pid 400, `fenetre`) : « arbre » en 20 lignes, la
+      dernière, blancs ôtés, « [Window] <Contenu> », comme le contenu d'un cadre du Store */ }
+  #[test] fn admis_suit_la_regle_d_accepte() { /* la retenue de la fenêtre 7 de P = 60, « KeePassXC.exe », qui porte
+      pids_enfants [400], son arbre à la retenue {60, 61, 62, 63} ; tous : 60, ses fils 61 « aide.exe », 62
+      « KeePassXC.exe », 63 « CredentialUIBroker.exe » et 64 « aide.exe » (né après la retenue), puis 300 et 400, de
+      parent 0. admis(&r, &tous) : vrai pour 60 (P, sans égard à son nom), 400 (une fenêtre enfant de W, hors de
+      l'arbre de P) et 61 ; faux pour 62 (KeePassXC), 63 (refusé), 64 (absent de l'arbre de P à la retenue) et 300
+      (hors de l'arbre de P) */ }
   #[test] fn arbre_dans_un_groupe() { /* « arbre --dans Options » : sortie == ["[Group] <Options>", "  [CheckBox] <Option
       externe> id=option-externe etat=decoche", "  [Group] <Options>", "    [CheckBox] <Option interne> id=option-interne
       etat=decoche"] ; « arbre --dans Rien » : Introuvable « aucun élément « Rien » pour --dans » */ }
@@ -1139,6 +1332,10 @@ ADR-0006.
           | AppelFaux::Niveau(_) | AppelFaux::TouchesEnfoncees | AppelFaux::Agir(..))), "{s}"); } }
   #[test] fn focus_rend_l_element_focalise() { let mut b = FauxBureau::avec_appli();
       assert_eq!(x(&mut b, "focus --fenetre appli-essai"), Issue::fait(vec!["[Edit] <Champ> id=champ valeur=bonjour".into()])); }
+  #[test] fn focus_sur_un_mot_de_passe_ne_lit_pas_la_valeur() { /* focus [Ok(Some(FocusLu { pid: 100, motdepasse: true,
+      indice: Some(5) }))] : Fait ["[Edit] <Mot de passe> id=motdepasse motdepasse=oui"], aucun LireValeur(5) */ }
+  #[test] fn focus_marque_au_moment_du_focus() { /* focus [Ok(Some(FocusLu { pid: 100, motdepasse: true, indice: Some(4) }))],
+      l'élément 4 non marqué en cache : la ligne porte motdepasse=oui, ni « valeur= » ni « bonjour », aucun LireValeur(4) */ }
   #[test] fn focus_hors_de_la_fenetre_visee_sort_en_1() { /* quatre cas, chacun Refus « focus hors de la fenêtre visée »,
       sortie vide : le premier plan à la fenêtre 9 d'un processus 300 (ni OuvrirUia, ni LireArbre, ni LireFocus) ; le
       focus d'un PID 999 hors de l'arbre retenu ; le focus d'indice None ; et focus Ok(None) */ }
@@ -1156,6 +1353,8 @@ ADR-0006.
   #[test] fn trouver_rang_rien_et_tout() { /* --rang 2 : la seule ligne de taille-toutes, rang=2 ; --rang 4 : Introuvable
       « aucun élément au rang 4 : 3 candidats » ; --nom Rien : « aucun élément ne répond au sélecteur » ; trouver sans
       option : 18 lignes */ }
+  #[test] fn trouver_un_mot_de_passe_ne_lit_pas_la_valeur() { /* « trouver --id motdepasse » : ["[Edit] <Mot de passe>
+      id=motdepasse motdepasse=oui rang=1"], aucun LireValeur(5) */ }
   #[test] fn trouver_attend_un_element_qui_arrive() { /* arbres [a, a, a, a + Button « Arrivé »] et --attendre 1000 :
       Fait, une ligne "[Button] <Arrivé> rang=1", ecoule == 300 */ }
   #[test] fn ambiguite_ne_s_attend_pas() { /* « valeur --nom Toutes --attendre 1000 » : Introuvable « plusieurs éléments
@@ -1163,14 +1362,27 @@ ADR-0006.
   #[test] fn valeur_rend_la_ligne_de_l_element() { /* « valeur --id champ » : ["[Edit] <Champ> id=champ valeur=bonjour"] */ }
   #[test] fn valeur_refuse_un_mot_de_passe_meme_avec_egale() { for s in ["valeur --id motdepasse", "valeur --id motdepasse
       --egale x"] { /* Refus « valeur non rendue : champ de mot de passe », jamais LireValeur(5) */ } }
+  #[test] fn valeur_marquee_a_la_lecture_n_est_pas_rendue() { /* masquees {4}, l'élément 4 non marqué en cache :
+      « valeur --id champ » et « valeur --id champ --egale bonjour » → Refus « valeur non rendue : champ de mot de
+      passe », aucun LireValeur(4) ; « arbre » : la ligne 4 porte motdepasse=oui, sans « bonjour » */ }
+  #[test] fn chaque_valeur_suit_son_marquage() { /* après « arbre », « trouver --id champ », « valeur --id champ » et
+      « focus » : chaque LireValeur(i) suit immédiatement un RelireMarquage(i) */ }
+  #[test] fn valeur_illisible_fait_echouer_la_lecture() { /* erreur_valeur au code UIA_DELAI : « valeur --id champ » et
+      « arbre » → Echec « échec du système : délai de l'automatisation dépassé », sortie vide ; au code UIA_DISPARU :
+      Introuvable « l'élément a disparu » ; erreur_marquage au code 0x80004005 : Echec, sans LireValeur */ }
+  #[test] fn rejoue_et_arrete_selon_l_attente() { /* chacun avec --attendre 1000 ; arrêtent tout de suite, ecoule == 0 :
+      « valeur --id motdepasse » (mot de passe), « valeur --id depart » (motif absent), « valeur --id champ » sous
+      erreur_valeur au code UIA_DISPARU (élément disparu) ; se rejouent jusqu'à la borne, ecoule == 1000 : « trouver
+      --nom Toutes --rang 4 », « arbre --dans Rien », et « focus » sous le premier plan à la fenêtre 9 d'un processus
+      300, debut pris avant ce premier essai */ }
   #[test] fn valeur_sans_motif_sort_en_3() { /* « valeur --id depart » : Echec « échec du système : l'élément n'offre pas le
       motif Value » */ }
   #[test] fn valeur_egale() { /* --egale bonjour : Fait, la ligne ; --egale autre : Introuvable « la valeur diffère de
       « autre » » ; valeurs {4 : ["", "", "bonjour"]} et « --egale bonjour --attendre 1000 » : Fait, ecoule == 200 ;
       valeurs {4 : ["e\u{301}"]} et --egale é : Fait */ }
   #[test] fn selecteur_vide_sort_en_64() { /* « valeur --fenetre appli-essai » : Usage « sélecteur vide : --nom,
-      --contient, --type, --id, --classe ou --dans » ; « trouver --type Bouton » : Usage « type inconnu : Bouton » ; aucune
-      lecture de fenêtre */ }
+      --contient, --type, --id, --classe ou --dans » ; « trouver --type Bouton » et « focus --type Bouton » : Usage
+      « type inconnu : Bouton » ; aucune lecture de fenêtre */ }
   #[test] fn defilables_liste_ce_qui_defile() { /* ["[Group] <Cadre des lignes> id=cadre"] ; un arbre sans `defile` : Fait,
       sortie vide */ }
   #[test] fn lecture_ecrit_sa_ligne_au_journal() { /* arbre : une ligne « arbre », processus appli-essai, code 0 */ }
@@ -1178,13 +1390,16 @@ ADR-0006.
   `sous_commande_pas_encore_livree_sort_en_64` et `pas_encore_livree_exige_le_journal` passent de `focus --fenetre x`
   à `fermer --fenetre x` (« pas encore livrée : fermer »).
 - [ ] **Étape 2 : voir rouge** : `cargo test --lib -- domaine::lectures domaine::gestes`.
-- [ ] **Étape 3 : le code.** `lectures.rs` suit les décisions 5, 6 et 8 ; `Travail::Lecture` porte les cinq
-  sous-commandes ; `Suivi`, `sonder`, `premier_plan_accepte`, `lire_fenetres_et_processus`, `echec` et
-  `echec_systeme` passent en `pub(crate)` ; « (décision N) » remplacé dans `gestes.rs` s'il en reste.
+- [ ] **Étape 3 : le code.** `lectures.rs` suit les décisions 4, 5, 6 et 8 ; `Travail::Lecture` porte les cinq
+  sous-commandes ; `Suivi`, `Journal`, `sonder`, `lire_fenetres_et_processus`, `echec` et `echec_systeme` passent en
+  `pub(crate)` ; `premier_plan_et_instantane` reçoit le corps de `premier_plan_accepte`, qui ne fait plus que lui
+  retirer l'instantané ; « (décision N) » remplacé dans `gestes.rs` s'il en reste.
 - [ ] **Étape 4 : voir vert**, puis `cargo mutants -p pilote -F '^src/domaine/lectures\.rs:'` et
   `-F '^src/domaine/gestes\.rs:'`.
-- [ ] **Étape 5 : les ADR.** ADR-0005, « Ce qu'on lit reste dans la fenêtre retenue » : la décision 5, et la lecture
-  ratée de `IsPassword` qui fait échouer la lecture (décision 4). ADR-0006 : « La sortie », la décision 8 (sauf la
+- [ ] **Étape 5 : les ADR.** ADR-0005, « Ce qu'on lit reste dans la fenêtre retenue » : la décision 5, et les
+  fenêtres que W possède, écartées selon leur processus (décision 4) ; « Les valeurs secrètes ne sortent jamais » :
+  `focus` nommé, le marquage relu juste avant chaque valeur, et la lecture ratée de `IsPassword`, d'une valeur ou du
+  marquage qui fait échouer la lecture (décisions 4 et 8). ADR-0006 : « La sortie », la décision 8 (sauf la
   capture) ; « L'attente », la décision 6, l'échéance unique et le document de la page ; « L'analyse », « pas
   encore livrée » réservé à la tranche 3 ; « Les codes de sortie », ces lignes : au 2, la valeur qui diffère, avec ou
   sans `--attendre`, l'élément disparu, aucun élément pour `arbre --dans` ; au 3, la fenêtre qui ne répond pas, le
@@ -1201,8 +1416,8 @@ ADR-0006.
 `src/domaine/mod.rs`, `Cargo.toml`, `Cargo.lock`, ADR-0005, ADR-0006.
 
 **Interfaces :**
-- Consomme : `Image`, `Rect`, `sensible_au_dpi` (Tâche 5) ; `lectures::REPONSE_MAX` (Tâche 6) ; `keepassxc_dans`,
-  `retenir`, `Suivi`.
+- Consomme : `Image`, `Rect`, `sensible_au_dpi`, `faux::image_d_essai` et `gestes::essai::avec_keepassxc_par_explorer`
+  (Tâche 5) ; `lectures::REPONSE_MAX` (Tâche 6) ; `keepassxc_dans`, `retenir`, `Suivi`.
 - Produit :
   ```rust
   /// L'image rognée, en RGB, et la zone cliente relative à elle.
@@ -1242,13 +1457,15 @@ ADR-0006.
   #[test] fn capture_noire_sort_en_3() { /* chaque pixel [0, 0, 0, 255] : Echec « échec du système : capture toute noire »,
       rien d'écrit */ }
   #[test] fn capture_dans_un_dossier_absent_sort_en_64() { /* ecriture_ratee : Usage « fichier non écrit : c.png » */ }
-  #[test] fn capture_remplace_un_fichier_existant() { /* deux captures du même chemin : deux Ecrire, l'issue Fait à chaque fois */ }
   #[test] fn capture_echouee_dit_le_systeme() { /* image Err(ErreurSysteme("PrintWindow")) : Echec « échec du système :
       PrintWindow » */ }
   ```
+  L'écrasement d'un fichier existant n'a pas de test du domaine, qui ne sait rien du fichier : `capture_relue`
+  (Tâche 13) capture deux fois au même chemin.
 - [ ] **Étape 2 : voir rouge** : `cargo test --lib domaine::capture`.
 - [ ] **Étape 3 : le code**, dans l'ordre de la décision 5 pour `capture`, puis la décision 10.
-- [ ] **Étape 4 : voir vert**, puis `cargo mutants -p pilote -F '^src/domaine/capture\.rs:'`.
+- [ ] **Étape 4 : voir vert**, puis `cargo mutants -p pilote -F '^src/domaine/capture\.rs:'` et
+  `-F '^src/domaine/gestes\.rs:'`, que `Travail::Capture` touche.
 - [ ] **Étape 5 : les ADR.** ADR-0005, « Les captures » : la sensibilité au DPI exigée, le rognage, les jugements,
   l'écriture après eux, à la place d'un fichier existant, KeePassXC et la fenêtre réduite. ADR-0006 : la ligne
   `[Capture]` dans « La sortie », et `largeur`, `hauteur` et `zone-cliente` dans la liste des clés ; « Les codes de
@@ -1260,50 +1477,61 @@ ADR-0006.
 
 ### Tâche 8 : la garde d'une unité, la règle du champ de KeePassXC et le niveau des dialogues
 
-**Fichiers :** modifier `src/domaine/gestes.rs`, ADR-0005, ADR-0006.
+**Fichiers :** modifier `src/domaine/gestes.rs`, `tests/essais_gardes.rs` (l'essai de KeePassXC de la tranche 1 et
+sa constante retirés), ADR-0005, ADR-0006.
 
 **Interfaces :**
-- Consomme : `lire_le_focus`, `ouvrir_l_automatisation`, `niveaux`, `vol_apres_le_focus`, `gestes::essai` (Tâche 5) ;
-  `lectures::{ouvrir, lire_l_arbre, DOCUMENT_VIDE_MAX, DELAIS}` (Tâche 6) ; `keepassxc_dans`, `premier_plan_accepte`,
-  `juger_le_niveau`, `accepte`.
+- Consomme : `lire_le_focus`, `ouvrir_l_automatisation`, `niveaux`, `vol_apres_le_focus`, `gestes::essai`, dont
+  `avec_keepassxc_par_explorer` (Tâche 5) ; `lectures::{ouvrir, admis, lire_l_arbre, DOCUMENT_VIDE_MAX, DELAIS}` et
+  `element::essai::{arbre_d_essai, vide}` (Tâches 3 et 6) ; `premier_plan_et_instantane` (Tâche 6), qui fait le (a)
+  de la garde et en rend l'instantané ; `keepassxc_dans`, `juger_le_niveau`, `accepte`, `unites`.
 - Produit :
   ```rust
   pub const CADENCE_KEEPASSXC: Duree = Duree(100);
   /// Le niveau du processus `pid` comparé à celui de `pilote`, s'il n'est pas déjà dans `juges` (P y est d'emblée).
   pub(crate) fn juger_le_niveau_de(pid: u32, juges: &mut BTreeSet<u32>, b: &mut dyn Bureau) -> Result<(), Arret>;
-  /// Le premier plan accepté pour `r`, avec l'instantané des processus qu'il a lu : `premier_plan_accepte` le
-  /// rend sans l'instantané.
-  pub(crate) fn premier_plan_et_instantane(r: &Retenue, b: &mut dyn Bureau) -> Result<Option<(PremierPlan, Vec<Processus>)>, Arret>;
   /// Ce que la garde d'une unité garde d'une unité à l'autre.
   pub(crate) struct Garde { pub r: Retenue, pub juges: BTreeSet<u32>, pub keepassxc: bool,
       pub arbre_de: Option<IdFenetre>, pub arbre: Vec<ElementLu> }
   /// L'issue de la garde : l'unité part (le focus de KeePassXC dans un champ de mot de passe, ou non) ; le premier
-  /// plan n'est plus accepté, ou a changé entre ses deux lectures ; le focus de KeePassXC illisible.
+  /// plan n'est plus accepté, ou a changé entre (a) et (c) ; le focus de KeePassXC illisible.
   pub(crate) enum Avant { Part { motdepasse: bool }, Change, FocusIllisible }
-  /// La garde d'une unité (décision 13) : (a) le premier plan ; (b) `entre` (les lectures propres au geste, qui
-  /// rendent le PID d'une autre fenêtre à juger), le niveau des PID pas encore jugés, l'arbre et le focus de
-  /// KeePassXC ; (c) le premier plan relu, égal, si (b) a lu quoi que ce soit. Rien ne se lit après (c).
+  /// La garde d'une unité (ADR-0005, « Le premier plan accepté ») : (a) le premier plan accepté ; (b) `entre`, s'il
+  /// est donné (les lectures propres au geste, qui rendent le PID de la fenêtre sous le point, P compris), le niveau
+  /// des PID pas encore jugés, l'arbre et le focus de KeePassXC ; (c) si (b) a lu quoi que ce soit (`entre` donné, un
+  /// niveau lu, KeePassXC), une seule lecture du premier plan, égale à la dernière de (a). Rien ne se lit après (c).
   pub(crate) fn garder_l_unite(g: &mut Garde, b: &mut dyn Bureau,
-      entre: impl FnMut(&PremierPlan, &[Processus], &mut dyn Bureau) -> Result<Option<u32>, Arret>) -> Result<Avant, Arret>;
+      entre: Option<&mut dyn FnMut(&PremierPlan, &[Processus], &mut dyn Bureau) -> Result<u32, Arret>>)
+      -> Result<Avant, Arret>;
   ```
   `refuser_keepassxc` et le message `KEEPASSXC` disparaissent ; à leur place, le texte refusé (positions 3 et 10),
-  puis, si KeePassXC se lit à la retenue ou au rejugement, `lectures::ouvrir(w)` après la position 12, et la boucle
-  des unités passe par `garder_l_unite` (sans `entre`, pour le clavier) : `Change` refuse « le premier plan a changé :
-  <k> unités sur <n> sont parties » ; `FocusIllisible`, « KeePassXC : focus illisible ; … » ; `Part { motdepasse:
-  true }`, le refus du champ pour `taper`, et pour `touche` hors des touches de déplacement nues. L'arbre de la
-  garde se lit par `lectures::lire_l_arbre(pp.id, maintenant + DOCUMENT_VIDE_MAX, b)` quand `arbre_de` n'est pas
-  `pp.id` ; un focus `Err`, `Ok(None)`, ou d'`indice` nul est illisible ; son `pid` ne se juge pas (décision 12).
+  jugé sur ses unités (`Unite::Tab | Unite::Entree`), puis, si KeePassXC se lit à la retenue ou au rejugement,
+  `lectures::ouvrir(w)` après la position 12, et la boucle des unités passe par `garder_l_unite` (`entre` à `None`,
+  pour le clavier) : `Change` refuse « le premier plan a changé : <k> unités sur <n> sont parties » ;
+  `FocusIllisible`, « KeePassXC : focus illisible ; … » ; `Part { motdepasse: true }`, le refus du champ pour
+  `taper`, et pour `touche` hors des touches de déplacement nues. L'arbre de la garde se lit par
+  `lectures::lire_l_arbre(pp.id, maintenant + DOCUMENT_VIDE_MAX, &admis(&g.r, &tous), b)`, `tous` étant l'instantané
+  de (a), quand `arbre_de` n'est pas `pp.id` ; un focus `Err`, `Ok(None)`, d'`indice` nul, d'indice 0, sur un élément
+  `hors` ou de type `Window`, `Pane` ou `Document` est illisible ; son `pid` ne se juge pas ; un échec de
+  `lectures::ouvrir` ou de l'arbre sort par `arret_uia` (décision 12).
 
-- [ ] **Étape 1 : les tests, rouges.** `avec_keepassxc_par_explorer()` est celui de la tranche 1, le premier plan posé à
-  sa fenêtre 7 (`pp(7, 60, Vec::new())`) pour que les unités partent sans activation ; `focus_mdp()` rend
-  `Ok(Some(FocusLu { pid: 60, motdepasse: true, indice: Some(5) }))`, `focus_libre()` de même avec `motdepasse:
-  false, indice: Some(4)`.
+- [ ] **Étape 1 : les tests, rouges.** `avec_keepassxc_par_explorer()` vient de `gestes::essai` ; les tests qui
+  l'emploient ici posent le premier plan à sa fenêtre 7 (`pp(7, 60, Vec::new())`), pour que les unités partent sans
+  activation ; `focus_mdp()` rend `Ok(Some(FocusLu { pid: 60, motdepasse: true, indice: Some(5) }))`, `focus_libre()`
+  de même avec `motdepasse: false, indice: Some(4)`.
   ```rust
   #[test] fn keepassxc_taper_passe_hors_d_un_champ_de_mot_de_passe() { /* focus [focus_libre()] : « taper --fenetre
       explorer --texte ab » en 0, deux unités envoyées, OuvrirUia(DELAIS), un LireArbre(IdFenetre(7)), puis deux
-      LireFocus */ }
-  #[test] fn keepassxc_refuse_taper_dans_un_champ_de_mot_de_passe() { /* focus [focus_mdp()] : Refus « KeePassXC : focus
-      dans un champ de mot de passe ; 0 unités sur 2 sont parties », aucune unité envoyée */ }
+      LireFocus ; puis l'élément 1 de l'arbre marqué `fenetre`, de pid 60 (P, KeePassXC, qu'`admis` admet sans juger
+      son nom) : le même `taper` en 0, deux unités envoyées, le focus 4 accepté */ }
+  #[test] fn keepassxc_refuse_taper_dans_un_champ_de_mot_de_passe() { /* focus [focus_mdp()] : « taper --fenetre explorer
+      --texte ab » → Refus « KeePassXC : focus dans un champ de mot de passe ; 0 unités sur 2 sont parties », aucune
+      unité envoyée ; le journal nomme P, non le nom demandé :
+      assert_eq!(b.journal, vec![format!("{TETE}taper\tKeePassXC\t1\t2\n")]) */ }
+  #[test] fn keepassxc_ouverture_et_arbre_rates_sortent_en_3() { /* explorer, focus [focus_libre()] : repond faux → Echec
+      « échec du système : la fenêtre ne répond pas », Repond noté, ni OuvrirUia ni unité ; erreur_arbre au code
+      UIA_DELAI → Echec « échec du système : délai de l'automatisation dépassé », aucune unité, jamais « focus
+      illisible » */ }
   #[test] fn keepassxc_relit_le_focus_avant_chaque_unite() { /* focus [libre, mdp] et « --texte abc » : Refus « … ; 1 unités
       sur 3 sont parties », une seule unité envoyée, deux LireFocus */ }
   #[test] fn keepassxc_sonde_l_arbre_avant_le_focus() { /* arbres [vide(), arbre_d_essai()] et focus [focus_libre()] :
@@ -1312,23 +1540,25 @@ ADR-0006.
       KeePassXC (la règle s'applique), focus [libre] ; vol_apres_le_focus (1, la fenêtre 2 de PID 100, que W possède,
       acceptée) : « taper --fenetre appli-essai --texte ab » → Refus « le premier plan a changé : 0 unités sur 2 sont
       parties », aucune unité envoyée : un premier plan relu, même accepté, doit égaler celui d'avant les lectures */ }
-  #[test] fn keepassxc_refuse_un_texte_qui_porte_une_tabulation() { for t in ["a\tb", "a\nb", "a\r\nb"] { /* Refus « KeePassXC :
+  #[test] fn keepassxc_refuse_un_texte_qui_porte_une_tabulation() { for t in ["a\tb", "a\nb", "a\r\nb", "a\rb"] { /* Refus « KeePassXC :
       un texte qui porte une tabulation ou un saut de ligne est refusé », sans PrendreVerrou */ } }
   #[test] fn keepassxc_touche_dans_un_champ_de_mot_de_passe() { for t in ["Tab", "Maj+Tab", "Haut", "Bas", "Gauche", "Droite",
       "Debut", "Fin", "PageHaut", "PageBas", "Echap"] { /* focus [mdp] : « touche --fenetre explorer <t> » en 0 */ }
       for t in ["Entree", "Espace", "Ctrl+V", "Ctrl+Tab", "Maj+Haut", "Alt+Bas", "F2"] { /* Refus « KeePassXC : seules les
       touches de déplacement passent dans un champ de mot de passe ; 0 unités sur 1 sont parties » */ } }
   #[test] fn keepassxc_focus_illisible_refuse() { /* focus [Ok(None)], puis [Err(ErreurUia { code: 0x80004005, .. })], puis
-      [Ok(Some(FocusLu { pid: 60, motdepasse: false, indice: None }))] : chacun Refus « KeePassXC : focus illisible ; 0
-      unités sur 1 sont parties » */ }
+      un FocusLu { pid: 60, motdepasse: false } d'indice None, Some(0) (la fenêtre lue), Some(1) (le Pane), Some(2) (le
+      Document), et Some(4) quand l'élément 4 est une fenêtre (`fenetre`) d'un processus 300, que `borner` écarte :
+      chacun Refus « KeePassXC : focus illisible ; 0 unités sur 1 sont parties », aucune unité envoyée */ }
   #[test] fn keepassxc_attend_100_ms_entre_deux_unites() { /* « taper --texte ab » : Attendre(Duree(100)) après chaque
       unité, jamais Attendre(CADENCE) */ }
   #[test] fn keepassxc_enfant_de_w_applique_la_regle() { /* W d'appli-essai, une fenêtre enfant de KeePassXC : focus [mdp]
       → le même refus ; « activer » ne lit pas le focus */ }
-  #[test] fn keepassxc_rejuge_apres_l_activation() { /* l'enfant KeePassXC ne paraît qu'à la relecture : « taper --texte
-      a\tb » refuse au rejugement, après l'activation ; « taper --texte a » lit le focus avant son unité */ }
-  #[test] fn hors_de_keepassxc_le_focus_ne_se_lit_pas() { /* appli-essai : « taper --texte ab » sans OuvrirUia, LireArbre
-      ni LireFocus */ }
+  #[test] fn keepassxc_rejuge_apres_l_activation() { /* remplace le test de même nom de la tranche 1 : l'enfant KeePassXC
+      ne paraît qu'à la relecture : « taper --texte a\tb » refuse au rejugement, après l'activation ; « taper --texte
+      a » lit le focus avant son unité */ }
+  #[test] fn hors_de_keepassxc_le_focus_ne_se_lit_pas() { /* couverture : appli-essai : « taper --texte ab » sans
+      OuvrirUia, LireArbre ni LireFocus */ }
   #[test] fn niveau_juge_pour_un_dialogue_d_un_autre_processus() { /* processus 101, fils de 100 ; premier plan : fenêtre 2
       de PID 101, propriétaires [1] ; niveaux [(101, Some(0x3000))] : « touche Tab » → Refus « fenêtre plus élevée que
       pilote », aucune unité ; [(101, None)] → « niveau d'intégrité illisible » ; [(101, Some(0x2000))] et « --fois 3 » :
@@ -1336,33 +1566,40 @@ ADR-0006.
   #[test] fn premier_plan_juste_avant_chaque_envoi_du_clavier() { /* premier_plan_juste_avant(&b) pour : « taper --fenetre
       explorer --texte ab » (KeePassXC, focus [libre]) ; « touche --fenetre explorer Tab » (KeePassXC, focus [mdp]) ;
       « touche --fenetre appli-essai Tab --fois 3 » sous le dialogue de PID 101 au niveau 0x2000 ; et, pour KeePassXC,
-      un LireFocus entre les deux triplets qui précèdent chaque envoi */ }
+      un LireFocus entre le triplet et la seule relecture du premier plan qui précèdent chaque envoi, aucun Processus
+      entre le dernier LireFocus et l'Envoi */ }
   ```
   Les tests `keepassxc_par_explorer_refuse_taper`, `keepassxc_par_explorer_refuse_touche`,
-  `keepassxc_enfant_de_w_refuse_taper` et le constructeur `refus_keepassxc` de la tranche 1 se retirent, remplacés
-  par ceux-ci ; `premier_plan_verifie_avant_chaque_unite` reste vert tel quel.
+  `keepassxc_enfant_de_w_refuse_taper` et `keepassxc_rejuge_apres_l_activation`, et le constructeur
+  `refus_keepassxc`, de la tranche 1, se retirent ; le dernier renaît sous le même nom, avec la règle du champ, et
+  `keepassxc_refuse_taper_dans_un_champ_de_mot_de_passe` reprend l'assertion du journal du premier ;
+  `premier_plan_verifie_avant_chaque_unite` reste vert tel quel. Dans `tests/essais_gardes.rs`, l'essai
+  `copie_keepassxc_refuse_taper_et_touche` et la constante `KEEPASSXC`, qui attendent le message retiré, se retirent
+  aussi : sinon `essais_gardes` serait rouge dès le premier envoi de la Tâche 13, mêlant ce défaut aux siens ; la
+  Tâche 15 écrit leur successeur.
 - [ ] **Étape 2 : voir rouge** : `cargo test --lib domaine::gestes`.
 - [ ] **Étape 3 : le code**, décisions 12 et 13.
 - [ ] **Étape 4 : voir vert**, puis `cargo mutants -p pilote -F '^src/domaine/gestes\.rs:'`.
 - [ ] **Étape 5 : les ADR.** ADR-0005, « Le premier plan accepté » : la garde d'une unité, les lectures d'entre-deux
-  entre deux lectures égales du premier plan, l'envoi juste après la dernière (décision 13) ; « KeePassXC » : la puce
-  « D'ici la tranche 2 … le refus est entier » cède à la règle en vigueur, décision 12, le focus jugé sur l'arbre lu
-  et sa limite (le focus lu après une tabulation, 100 ms ; un élément né après la lecture refusé) comprises ; « Le
+  entre le premier plan accepté et une seule relecture, égale, l'envoi juste après elle, et pourquoi une lecture
+  suffit (décision 13) ; « KeePassXC » : la puce « D'ici la tranche 2 … le refus est entier » cède à la règle en
+  vigueur, décision 12, le focus jugé sur l'arbre lu, illisible sur la fenêtre hôte, et ses limites (le focus lu après
+  une tabulation, 100 ms ; un élément né après la lecture refusé ; un `Document` de Qt refusé) comprises ; « Le
   niveau d'intégrité se juge par comparaison » : la décision 13 ; la conséquence « D'ici la tranche 2 du lot 1,
   KeePassXC ne reçoit ni `touche` ni `taper` » se retire. ADR-0006 : la ligne du message de KeePassXC se retire du
   tableau des messages, les quatre messages de la décision 12 y entrent, et le focus illisible de KeePassXC entre au
   1 de « Les codes de sortie ». « Confirmation » et les sous-sections reçoivent ces points.
-- [ ] **Étape 6 : commit** : `git add src/domaine/gestes.rs docs/decisions/0005-garde-fous-fenetre-retenue-et-premier-plan.md docs/decisions/0006-interface-sortie-codes-journal-et-bornes.md`
+- [ ] **Étape 6 : commit** : `git add src/domaine/gestes.rs tests/essais_gardes.rs docs/decisions/0005-garde-fous-fenetre-retenue-et-premier-plan.md docs/decisions/0006-interface-sortie-codes-journal-et-bornes.md`
   (et `.cargo/mutants.toml` s'il change), puis
   `git commit -m "feat(domaine): la garde d'une unité, le champ de KeePassXC et le niveau des dialogues"`.
 
 ### Tâche 9 : les gestes de l'automatisation — focaliser, invoquer, choisir et defiler
 
-**Fichiers :** créer `src/domaine/automatisation.rs` ; modifier `src/domaine/gestes.rs` (`Travail`,
-`preparer_le_geste`, `Suivi::agir`), `src/domaine/mod.rs`, ADR-0005, ADR-0006.
+**Fichiers :** créer `src/domaine/automatisation.rs` ; modifier `src/domaine/gestes.rs` (`Travail`, `Frappe` en
+`pub(crate)`, `preparer_le_geste`, `Suivi::agir`), `src/domaine/mod.rs`, ADR-0005, ADR-0006.
 
 **Interfaces :**
-- Consomme : `lectures::{ouvrir, lire_l_arbre, SONDE, DOCUMENT_VIDE_MAX}` ; `choisir_un`, `analyser_le_selecteur` ;
+- Consomme : `lectures::{ouvrir, admis, lire_l_arbre, SONDE, DOCUMENT_VIDE_MAX}` ; `choisir_un`, `analyser_le_selecteur` ;
   `arret_uia`, `UIA_DELAI` ; `garder_l_unite`, `Garde`, `Avant` (Tâche 8) ; `vol_apres_l_arbre`, `vol_apres_agir`,
   `gestes::essai` (Tâche 5) ; `sonder`.
 - Produit :
@@ -1375,12 +1612,14 @@ ADR-0006.
   // gestes.rs
   /// Les positions 3 à 10 de l'ordre des gardes, communes à tout geste qui vise une fenêtre.
   pub(crate) struct Prepare { pub r: Retenue, pub w: FenetreLue, pub tous: Vec<Processus>, pub pp: PremierPlan }
+  pub(crate) enum Frappe { /* inchangée ; pub(crate), sinon `automatisation` et `pointeur` ne peuvent passer `None` */ }
   pub(crate) fn preparer_le_geste(cible: &Cible, frappe: Option<&Frappe>, s: &mut Suivi, b: &mut dyn Bureau) -> Result<Prepare, Arret>;
   impl Suivi { /// Compte le geste, puis agit.
       pub(crate) fn agir(&mut self, b: &mut dyn Bureau, i: usize, g: GesteUia) -> Result<(), ErreurUia> }
   ```
   `geste` (le clavier) passe par `preparer_le_geste` sans changer d'ordre ; les tests de la tranche 1 restent
-  verts tels quels. Chaque appel qui agit passe par `garder_l_unite` (sans `entre`), puis `Suivi::agir` ; `Change`
+  verts tels quels. L'arbre de W se lit par `lectures::lire_l_arbre(w, fin, &admis(&p.r, &p.tous), b)`. Chaque appel
+  qui agit passe par `garder_l_unite` (`entre` à `None`), puis `Suivi::agir` ; `Change`
   refuse « le premier plan a changé : <k> unités sur <n> sont parties » (décision 9) ; une erreur de `agir` au code
   `UIA_DELAI` sort en « échec du système : délai de l'automatisation dépassé pendant le geste ; il a pu agir : relire
   avant de rejouer », toute autre par `arret_uia`.
@@ -1395,6 +1634,16 @@ ADR-0006.
   #[test] fn invoquer_un_element_sans_le_geste_sort_en_3() { /* --id titre-defilee : Echec « échec du système : l'élément
       n'offre pas le motif Invoke », aucun Agir */ }
   #[test] fn element_disparu_sort_en_2() { /* erreur_agir code UIA_DISPARU : Introuvable « l'élément a disparu » */ }
+  #[test] fn choisir_sonde_un_element_disparu() { /* le jumeau de l'essai de la case fugace (Tâche 14) : erreur_etat au
+      code UIA_DISPARU : « choisir --id case » → Introuvable « l'élément a disparu », un seul Agir(6, Basculer), un
+      seul RelireEtat(6), ecoule == 0 : jamais « l'état n'a pas changé en 2 s » */ }
+  #[test] fn invoquer_ignore_un_element_d_une_fenetre_possedee_d_un_autre_processus() { /* gestes::essai::possedee(b) (Tâche 6) :
+      « invoquer --id ok » → Introuvable « aucun élément ne répond au sélecteur », aucun Agir */ }
+  #[test] fn gestes_exigent_un_selecteur() { for s in ["focaliser", "invoquer", "choisir", "defiler --a 0"] { /* « <s>
+      --fenetre appli-essai » : Usage « sélecteur vide : --nom, --contient, --type, --id, --classe ou --dans », ni
+      Fenetres ni PrendreVerrou */ } /* « invoquer --fenetre appli-essai --type Bouton » : Usage « type inconnu : Bouton » */ }
+  #[test] fn geste_d_un_hote_qui_ne_repond_pas_sort_en_3() { /* repond faux : « invoquer --id depart » → Echec « échec du
+      système : la fenêtre ne répond pas », ni OuvrirUia ni Agir */ }
   #[test] fn premier_plan_perdu_avant_le_geste() { /* vol_apres_l_arbre (1, la fenêtre 9 d'un processus 300) :
       « invoquer --id depart » → Refus « le premier plan a changé : 0 unités sur 1 sont parties », aucun Agir */ }
   #[test] fn delai_pendant_le_geste_dit_qu_il_a_pu_agir() { /* erreur_agir au code UIA_DELAI : « invoquer --id depart » →
@@ -1417,7 +1666,9 @@ ADR-0006.
       pas coché après deux bascules », deux bascules */ }
   #[test] fn choisir_ne_decoche_jamais() { /* case à coche Some(1) : Fait, aucun Agir, aucun RelireEtat */ }
   #[test] fn choisir_choisit_un_bouton_radio() { /* choisi Some(false) sur 8, sans Toggle ; etats [choisi Some(false),
-      choisi Some(true)] : « choisir --id couleur-toutes » Fait, Agir(8, Choisir) une fois ; choisi Some(true) : aucun Agir */ }
+      choisi Some(true)] : « choisir --id couleur-toutes » Fait, Agir(8, Choisir) une fois, deux RelireEtat(8), ecoule ==
+      100 ; etats [choisi Some(false)] : Echec « échec du système : l'état n'a pas changé en 2 s », un seul Agir(8,
+      Choisir), ecoule == 2000 ; choisi Some(true) : aucun Agir */ }
   #[test] fn choisir_sans_motif_sort_en_3() { /* --id depart : Echec « échec du système : l'élément n'offre ni Toggle ni
       SelectionItem » */ }
   #[test] fn sondes_d_etat_sans_premier_plan() { /* entre Agir(6, Basculer) et le dernier RelireEtat, aucun PremierPlan */ }
@@ -1426,15 +1677,15 @@ ADR-0006.
   #[test] fn defiler() { /* « defiler --id cadre --a 40 » : Agir(17, Defiler(40)) ; --id titre-defilee : Echec « échec du
       système : l'élément n'offre pas le motif Scroll » ; defile horizontal seul : Echec « échec du système : l'élément ne
       défile pas verticalement » */ }
-  #[test] fn focaliser() { /* « focaliser --id zone » sur un Edit d'id zone : Agir(i, Focaliser), Fait, sortie vide */ }
+  #[test] fn focaliser() { /* « focaliser --id champ » (l'Edit 4) : Agir(4, Focaliser), Fait, sortie vide */ }
   #[test] fn ambiguite_avant_tout_geste() { /* « invoquer --nom Toutes » : Introuvable « plusieurs éléments … : 3 ; --rang
       départage », aucun Agir */ }
   #[test] fn niveau_d_un_dialogue_avant_l_agir() { /* premier plan : dialogue de PID 101 au niveau 0x3000 : Refus « fenêtre
       plus élevée que pilote », aucun Agir */ }
-  #[test] fn premier_plan_juste_avant_chaque_agir() { /* premier_plan_juste_avant(&b) pour « focaliser --id zone »,
+  #[test] fn premier_plan_juste_avant_chaque_agir() { /* premier_plan_juste_avant(&b) pour « focaliser --id champ »,
       « invoquer --id depart », « choisir --id case » (etats [etat(2), etat(1)], deux bascules), « choisir --id
-      couleur-toutes » (Select), « defiler --id cadre --a 40 », et « invoquer --id depart » sous le dialogue de PID 101
-      au niveau 0x2000 */ }
+      couleur-toutes » (Select : choisi Some(false) sur 8, etats [choisi Some(false), choisi Some(true)]), « defiler
+      --id cadre --a 40 », et « invoquer --id depart » sous le dialogue de PID 101 au niveau 0x2000 */ }
   ```
 - [ ] **Étape 2 : voir rouge** : `cargo test --lib -- domaine::automatisation domaine::gestes`.
 - [ ] **Étape 3 : le code**, décision 9 ; l'analyse juge `analyser_le_selecteur(sel, true)` pour les quatre.
@@ -1452,36 +1703,46 @@ ADR-0006.
 
 ### Tâche 10 : le pointeur — clic et molette
 
-**Fichiers :** créer `src/domaine/pointeur.rs` ; modifier `src/domaine/gestes.rs` (`Travail`),
-`src/domaine/mod.rs`, ADR-0005, ADR-0006.
+**Fichiers :** créer `src/domaine/pointeur.rs` ; modifier `src/domaine/gestes.rs` (`Travail` ; `insertion_complete`
+et `Suivi::envoyer` en `pub(crate)`), `src/domaine/mod.rs`, ADR-0005, ADR-0006.
 
 **Interfaces :**
 - Consomme : `Evenement::{Pointeur, Bouton, Molette}`, `CRAN` (Tâche 2) ; `zone_cliente`, `fenetre_sous`,
   `bureau_virtuel`, `boutons_inverses`, `sensible_au_dpi`, `zones`, `gestes::essai` (Tâche 5) ; `garder_l_unite`,
-  `Garde`, `Avant` (Tâche 8) ; `preparer_le_geste` (Tâche 9) ; `insertion_complete`, `accepte`, `CADENCE`.
+  `Garde`, `Avant` (Tâche 8) ; `preparer_le_geste` (Tâche 9) ; `insertion_complete`, `Suivi::envoyer`, `accepte`,
+  `CADENCE`.
 - Produit :
   ```rust
+  // gestes.rs
+  impl Suivi { /* `envoyer`, inchangée, passe en pub(crate) : le seul envoi qui compte le geste (`agi`) */
+      pub(crate) fn envoyer(&mut self, b: &mut dyn Bureau, lot: &[Evenement]) -> u32 }
+  // pointeur.rs
   #[derive(Clone, Debug, PartialEq)] pub enum Action { Clic { double: bool, droit: bool }, Molette(i32) }
   #[derive(Clone, Debug, PartialEq)] pub struct Pointage { pub cible: Cible, pub x: i32, pub y: i32, pub action: Action }
-  /// Le point d'écran `p`, en coordonnées normalisées du bureau virtuel, au quart de pixel (décision 11).
+  /// Le point d'écran `p`, en coordonnées normalisées du bureau virtuel, au quart de pixel, calculé en `i64`
+  /// (ADR-0005, « Les gestes et l'ordre des gardes »).
   pub fn normaliser(p: Point, virtuel: Rect) -> (u16, u16);
   /// Le lot d'une unité, au point normalisé : un clic, un double clic ou un cran ; `inverses` échange les boutons.
   pub fn lot(action: &Action, x: u16, y: u16, inverses: bool) -> Vec<Evenement>;
   pub(crate) fn pointer(p: &Pointage, s: &mut Suivi, b: &mut dyn Bureau) -> Result<Issue, Arret>;
   ```
-  `pointer` : `preparer_le_geste`, les touches enfoncées relues, la sensibilité au DPI ; puis, pour chaque unité (une
-  pour un clic, `|crans|` pour la molette), `garder_l_unite` avec un `entre` qui relit la zone cliente et le bureau
-  virtuel, calcule le point d'écran, juge la zone, l'écran et la fenêtre sous le point (par `accepte`, sur
-  l'instantané reçu), garde ce point, et rend le PID de la fenêtre sous le point ; puis `normaliser` ce même point,
-  `lot`, l'envoi, `insertion_complete`, la cadence. Aucun lot ne se calcule d'avance : chaque unité vise le point
-  qu'elle vient de juger.
+  `pointer` : `preparer_le_geste`, les touches enfoncées relues, la sensibilité au DPI, puis `boutons_inverses`, lu
+  une fois ; puis, pour chaque unité (une pour un clic, `|crans|` pour la molette), `garder_l_unite` avec `entre` à
+  `Some` : il relit la zone cliente et le bureau virtuel, calcule le point d'écran, juge la zone, l'écran et la
+  fenêtre sous le point (par `accepte`, sur l'instantané reçu), garde ce point, et rend toujours le PID de la fenêtre
+  sous le point, P compris (`garder_l_unite` saute les PID déjà jugés) ; puis `normaliser` ce même point, `lot`,
+  l'envoi par `Suivi::envoyer`, jamais par `b.envoyer`, pour que l'envoi compte comme un geste (ADR-0005, « Après un
+  geste »), `insertion_complete`, la cadence. Aucun lot ne se calcule d'avance : chaque unité vise le point qu'elle
+  vient de juger.
 
 - [ ] **Étape 1 : les tests, rouges.** `v(x, y, l, h)` rend un `Rect`.
   ```rust
   #[test] fn normalisation_vise_le_quart_du_pixel() { let e = v(0, 0, 1024, 768);
       assert_eq!(normaliser(Point { x: 0, y: 0 }, e), (16, 21)); assert_eq!(normaliser(Point { x: 512, y: 384 }, e), (32784, 32789));
       assert_eq!(normaliser(Point { x: 1023, y: 767 }, e), (65488, 65472));
-      let d = v(-1920, 0, 3840, 1080); assert_eq!(normaliser(Point { x: -1920, y: 0 }, d).0, 4); assert_eq!(normaliser(Point { x: 0, y: 0 }, d).0, 32772); }
+      let d = v(-1920, 0, 3840, 1080); assert_eq!(normaliser(Point { x: -1920, y: 0 }, d).0, 4); assert_eq!(normaliser(Point { x: 0, y: 0 }, d).0, 32772);
+      let w = v(0, 0, 16_384, 1080);   // au-delà de 8 192 px, le produit dépasse i32
+      assert_eq!(normaliser(Point { x: 8_192, y: 0 }, w).0, 32_769); assert_eq!(normaliser(Point { x: 16_383, y: 0 }, w).0, 65_533); }
   #[test] fn clic_envoie_un_seul_lot() { let mut b = FauxBureau::avec_appli();
       assert_eq!(x(&mut b, "clic --fenetre appli-essai --x 10 --y 20"), Issue::fait(Vec::new()));
       assert_eq!(b.envois(), vec![vec![Evenement::Pointeur { x: 3763, y: 13365 },
@@ -1494,8 +1755,11 @@ ADR-0006.
   #[test] fn point_hors_de_la_zone_cliente_sort_en_1() { for (px, py) in [(800, 10), (-1, 10), (10, 600), (10, -1)] {
       /* Refus « point hors de la zone cliente : <px>,<py> pour 800×600 », aucun Pointeur envoyé */ }
       /* (799, 599) passe */ }
-  #[test] fn clic_refuse_un_point_hors_de_l_ecran() { /* zones [Some(Rect { x: 1900, y: 200, largeur: 800, hauteur: 600 })] :
-      « --x 50 --y 10 » → Refus « point hors de l'écran : 50,10 » */ }
+  #[test] fn clic_refuse_un_point_hors_de_l_ecran() { /* virtuel (0, 0, 1920, 1080), chaque zone de 800 × 600 : en x 1820,
+      « --x 99 --y 10 » passe (écran 1919) et « --x 100 --y 10 » → Refus « point hors de l'écran : 100,10 » ; en y 980,
+      « --y 99 » passe, « --y 100 » refuse ; en (-10, -10), « --x 9 » refuse (écran -1), « --x 10 » passe, et de même
+      en y ; une origine non nulle, virtuel (-1920, 0, 3840, 1080) et la zone en x -1950 : « --x 10 » refuse (écran
+      -1940), « --x 30 » passe (écran -1920) */ }
   #[test] fn clic_refuse_un_point_recouvert_dans_le_domaine() { /* sous_le_point : fenêtre 9 de PID 300 : Refus « point recouvert
       par une autre fenêtre », aucun envoi ; sous_le_point None : de même */ }
   #[test] fn clic_sur_un_dialogue_de_w_passe() { /* sous_le_point : fenêtre 2 de PID 100, propriétaires [1] : Fait */ }
@@ -1504,7 +1768,8 @@ ADR-0006.
       système : pilote n'est pas sensible au DPI », ni ZoneCliente ni envoi */ }
   #[test] fn molette_s_arrete_quand_le_premier_plan_change() { /* --crans 3, le premier plan volé après le 1er envoi :
       Refus « le premier plan a changé : 1 unités sur 3 sont parties » */ }
-  #[test] fn chaque_unite_relit_le_point() { /* --crans 2 : ZoneCliente et FenetreSous notés avant chaque envoi ; zones
+  #[test] fn chaque_unite_relit_le_point() { /* --crans 2 : ZoneCliente, BureauVirtuel et FenetreSous notés avant chaque
+      envoi, BoutonsInverses une seule fois, avant le premier triplet ; zones
       [Some(v(100, 200, 800, 600)), Some(v(300, 200, 800, 600))] et « molette --x 10 --y 20 --crans 2 » : le premier
       Pointeur vise l'écran (110, 220), le second (310, 220), chacun normalisé */ }
   #[test] fn niveau_d_un_dialogue_sous_le_point() { /* processus 101, fils de 100 ; sous_le_point : fenêtre 2 de PID 101,
@@ -1512,23 +1777,32 @@ ADR-0006.
       pilote », aucun envoi ; niveaux [(101, Some(0x2000))] et « molette --x 10 --y 20 --crans 3 » : Fait,
       Niveau(Some(101)) noté une fois */ }
   #[test] fn premier_plan_juste_avant_chaque_envoi_du_pointeur() { /* premier_plan_juste_avant(&b) pour « clic --x 10 --y
-      20 », « clic --x 10 --y 20 --double » et « molette --x 10 --y 20 --crans 3 » : chaque envoi suit le triplet, et
-      ZoneCliente et FenetreSous se lisent entre les deux triplets qui le précèdent */ }
+      20 », « clic --x 10 --y 20 --double » et « molette --x 10 --y 20 --crans 3 » : ZoneCliente, BureauVirtuel et
+      FenetreSous se lisent entre le triplet et la seule relecture du premier plan qui précèdent chaque envoi, aucun
+      Processus entre le dernier FenetreSous et l'Envoi */ }
   #[test] fn clic_prend_les_gardes() { /* une touche de modification enfoncée : Refus « touche de modification enfoncée »,
-      aucun Pointeur ; la fenêtre plus élevée : Refus, aucun envoi */ }
+      aucun Pointeur ; la position 11, sur le modèle de modificateurs_revus_apres_l_activation : premier plan None et
+      touches_apres [vk::CTRL_G] → le même Refus, une Demande notée, aucun Pointeur ; la fenêtre plus élevée : Refus,
+      aucun envoi */ }
   #[test] fn clic_insere_en_partie_relache_le_bouton() { /* insertions [2, 1] : Echec « échec du système : SendInput a inséré 2
       événements sur 3 ; relâchement : 1 sur 1 » */ }
+  #[test] fn clic_compte_comme_un_geste() { /* ajout_rate, le premier plan déjà à W (aucune activation) : « clic --x 10
+      --y 20 » et « molette --x 10 --y 20 --crans 1 » → Echec « échec du système : le journal n'a pas reçu sa ligne »,
+      un seul Envoi noté : le jumeau d'ajout_au_journal_rate_apres_un_geste_sort_en_3 pour le pointeur */ }
   ```
 - [ ] **Étape 2 : voir rouge** : `cargo test --lib domaine::pointeur`.
 - [ ] **Étape 3 : le code**, décisions 11 et 13.
-- [ ] **Étape 4 : voir vert**, puis `cargo mutants -p pilote -F '^src/domaine/pointeur\.rs:'`.
+- [ ] **Étape 4 : voir vert**, puis `cargo mutants -p pilote -F '^src/domaine/pointeur\.rs:'` et
+  `-F '^src/domaine/gestes\.rs:'`, que le travail du pointeur touche.
 - [ ] **Étape 5 : les ADR.** ADR-0005, « Les gestes et l'ordre des gardes » : la phrase « Aux tranches suivantes :
   pour `clic` et `molette` … » devient la règle au présent, avec la décision 11 : la sensibilité au DPI, le point
   relu et jugé à chaque unité, la normalisation, son échelle et l'essai qui la départage, les boutons inversés ; le
   niveau de la fenêtre sous le point (décision 13). ADR-0006 : « Les bornes », `--x` et `--y` ; « Les codes de
   sortie », ces lignes : au 1, les trois refus du point à la place de « point de clic ou de molette hors de la
   fenêtre retenue » ; au 3, la zone cliente illisible et `pilote` qui n'est pas sensible au DPI ; « Les messages »,
-  ceux du point. « Confirmation » et les sous-sections reçoivent ces points.
+  ceux du point. « Confirmation » et les sous-sections reçoivent ces points ; « Confirmation » nomme aussi
+  `clic_compte_comme_un_geste` sous « Le journal », « Après un geste », que l'envoi du pointeur suit sans que le
+  texte change (« un envoi est parti »).
 - [ ] **Étape 6 : commit** : `git add src/domaine/pointeur.rs src/domaine/gestes.rs src/domaine/mod.rs docs/decisions/0005-garde-fous-fenetre-retenue-et-premier-plan.md docs/decisions/0006-interface-sortie-codes-journal-et-bornes.md`
   (et `.cargo/mutants.toml` s'il change), puis `git commit -m "feat(domaine): clic et molette au point de la zone cliente"`.
 
@@ -1539,7 +1813,7 @@ ADR-0006.
 
 **Interfaces :**
 - Consomme : le trait de la Tâche 5.
-- Produit : `BureauWindows` réalise les quatorze méthodes nouvelles et `verr_maj` en `Option` ; plus aucun
+- Produit : `BureauWindows` réalise les quinze méthodes nouvelles et `verr_maj` en `Option` ; plus aucun
   provisoire. Les appels, sans condition qui décide :
   - `ouvrir_l_automatisation` : `CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)` ;
     `cast::<IUIAutomation2>()` puis `SetConnectionTimeout`, `SetTransactionTimeout` (les millisecondes reçues),
@@ -1549,7 +1823,7 @@ ADR-0006.
     `UIA_ControlTypePropertyId`, `UIA_NamePropertyId`, `UIA_AutomationIdPropertyId`, `UIA_ClassNamePropertyId`,
     `UIA_AcceleratorKeyPropertyId`, `UIA_AccessKeyPropertyId`, `UIA_LiveSettingPropertyId`,
     `UIA_IsPasswordPropertyId`, `UIA_IsEnabledPropertyId`, `UIA_ProcessIdPropertyId`,
-    `UIA_ToggleToggleStatePropertyId`, `UIA_ExpandCollapseExpandCollapseStatePropertyId`,
+    `UIA_NativeWindowHandlePropertyId`, `UIA_ToggleToggleStatePropertyId`, `UIA_ExpandCollapseExpandCollapseStatePropertyId`,
     `UIA_SelectionItemIsSelectedPropertyId`, `UIA_ValueIsReadOnlyPropertyId`,
     `UIA_ScrollVerticallyScrollablePropertyId`, `UIA_ScrollHorizontallyScrollablePropertyId`, et les motifs
     `UIA_InvokePatternId`, `UIA_TogglePatternId`, `UIA_SelectionItemPatternId`, `UIA_ValuePatternId`,
@@ -1559,13 +1833,17 @@ ADR-0006.
     `HRESULT(0)` lue comme `None`, puis l'état par le `Cached…` du motif (`CachedToggleState`, `CachedIsSelected`,
     `CachedExpandCollapseState`, `CachedIsReadOnly`, `CachedVerticallyScrollable` et `CachedHorizontallyScrollable`),
     jamais comme une propriété de l'élément : une `Option` d'`ElementLu` n'est `Some` que si le motif est offert
-    (Tâche 3) ; les éléments gardés, dans l'ordre de la liste rendue. `CachedIsPassword` qui échoue fait échouer la
-    lecture entière, en `ErreurUia` : jamais `false` par défaut.
+    (Tâche 3) ; `annonce` par `cast::<IUIAutomationElement2>()`, puis `CachedLiveSetting()` (jamais
+    `GetCachedPropertyValue`, qui demande `Win32_System_Ole`) ; `fenetre` vrai si `CachedNativeWindowHandle` n'est
+    pas nul ; `hors` toujours faux ; les éléments gardés, dans l'ordre de la liste rendue. `CachedIsPassword` qui
+    échoue fait échouer la lecture entière, en `ErreurUia` : jamais `false` par défaut.
   - `lire_le_focus` : `GetFocusedElement` (`HRESULT(0)` : `Ok(None)`), `CurrentProcessId`, `CurrentIsPassword`,
     l'indice par `CompareElements` contre les éléments gardés ; une erreur de `CurrentProcessId` ou de
-    `CurrentIsPassword` rend `Err`, que le domaine dit « focus illisible » pour KeePassXC. Le commentaire de ces deux
-    méthodes dit cette règle ; la revue de la tâche vérifie qu'aucun `unwrap_or_default`, `unwrap_or(false)`,
-    `unwrap_or_else` ni `.ok()` ne touche `IsPassword` ni `ProcessId`.
+    `CurrentIsPassword` rend `Err`, que le domaine dit « focus illisible » pour KeePassXC. Le commentaire de
+    `lire_l_arbre`, de `lire_le_focus` et de `relire_le_marquage` dit cette règle ; la revue de la tâche vérifie
+    qu'aucun `unwrap_or_default`, `unwrap_or(false)`, `unwrap_or_else` ni `.ok()` ne touche `IsPassword` ni
+    `ProcessId`.
+  - `relire_le_marquage` : `CurrentIsPassword` de l'élément gardé ; une erreur rend `Err`, jamais `false`.
   - `lire_la_valeur` : le motif Value en cache de l'élément gardé, puis `CurrentValue`.
   - `relire_l_etat` : `CurrentToggleState` et `CurrentIsSelected` des motifs en cache.
   - `agir` : `SetFocus`, `Invoke`, `Toggle`, `Select`, ou `SetScrollPercent(UIA_ScrollPatternNoScroll, f64::from(a))`.
@@ -1573,7 +1851,7 @@ ADR-0006.
     majuscules, suivi de « : <message> » si `e.message()` n'est pas vide, ou « <appel> : rien rendu » pour
     `HRESULT(0)`. Un indice hors de la dernière lecture rend `E_INVALIDARG` (0x80070057), « <appel> : indice hors de
     l'arbre ».
-  - `repond` : `SendMessageTimeoutW(W, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, délai, None)` non nul.
+  - `repond` : `SendMessageTimeoutW(w, WM_NULL, WPARAM(0), LPARAM(0), SMTO_ABORTIFHUNG, délai, None)` non nul.
   - `capturer` (`capture.rs`) : `GetWindowRect` ; `CreateCompatibleDC(None)` ; `CreateDIBSection` 32 bits,
     `biHeight` négatif, `BI_RGB` ; `SelectObject`, qui rend l'objet d'avant ; `PrintWindow(W, hdc,
     PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT))` ; `GdiFlush()`, avant toute lecture des bits (`CreateDIBSection`
@@ -1595,23 +1873,35 @@ ADR-0006.
 
 - [ ] **Étape 1 : les features et les modules.** `Cargo.toml` : `Win32_Graphics_Gdi`, `Win32_Storage_Xps`,
   `Win32_UI_Accessibility`, à leur place dans la liste triée. Aucun test : la couche n'en a pas.
-- [ ] **Étape 2 : le code**, méthode par méthode, chaque bloc `unsafe` avec son `// SAFETY:` ; les objets de
-  l'automatisation naissent et meurent sur le fil de `lancer` ; « (décision N) » remplacé dans ces fichiers s'il en
-  reste.
-- [ ] **Étape 3 : vérifier** : `cargo build -p pilote`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` ; `git grep -n "pas encore réalisé" -- src` ne rend rien.
-- [ ] **Étape 4 : commit** : `git add src/bureau/uia.rs src/bureau/capture.rs src/bureau/mod.rs src/bureau/fenetres.rs src/bureau/clavier.rs Cargo.toml Cargo.lock`,
-  puis `git commit -m "feat(bureau): automatisation, capture, pointeur et Verr. Maj sur un fil neuf"`.
+  La tâche se commite en deux temps, pour que sa revue juge l'automatisation et la capture chacune sur son commit,
+  et qu'un refus de l'une n'emporte pas l'autre.
+- [ ] **Étape 2 : l'automatisation**, méthode par méthode (`ouvrir_l_automatisation`, `lire_l_arbre`,
+  `lire_le_focus`, `relire_le_marquage`, `lire_la_valeur`, `relire_l_etat`, `agir`, `repond`), chaque bloc `unsafe`
+  avec son `// SAFETY:` ; les objets de l'automatisation naissent et meurent sur le fil de `lancer` ; « (décision N) »
+  remplacé dans ces fichiers s'il en reste. Vérifier : `cargo build -p pilote`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `cargo test --workspace`. Commit : `git add src/bureau/uia.rs src/bureau/mod.rs src/bureau/fenetres.rs Cargo.toml Cargo.lock`,
+  puis `git commit -m "feat(bureau): l'automatisation, l'arbre d'un seul tenant et ses gestes"`.
+- [ ] **Étape 3 : la capture, le pointeur et Verr. Maj** (`capturer`, `ecrire_fichier`, `zone_cliente`,
+  `fenetre_sous`, `bureau_virtuel`, `boutons_inverses`, `sensible_au_dpi`, `verr_maj`), de même. Vérifier : les trois
+  mêmes commandes ; `git grep -n "pas encore réalisé" -- src` ne rend rien.
+- [ ] **Étape 4 : commit** : `git add src/bureau/capture.rs src/bureau/mod.rs src/bureau/fenetres.rs src/bureau/clavier.rs`,
+  puis `git commit -m "feat(bureau): capture, pointeur et Verr. Maj sur un fil neuf"`.
 
 ### Tâche 12 : l'application d'essai
 
 **Fichiers :** modifier `essai/appli/src/main.rs`, `essai/appli/src/page.html`.
 
 **Interfaces :**
-- Produit : quatre options, chacune une fois au plus : `--couleur <#rrggbb>` (la page ne montre qu'un bloc fixe de
-  cette couleur sur toute la fenêtre), `--au-dessus` (la fenêtre toujours au-dessus), `--position <x>,<y>` (sa
-  position extérieure, en pixels physiques, négatifs admis), `--taille <l>,<h>` (sa zone cliente, en pixels
-  physiques, 1 au moins) ; chacune refusée sinon par `refusee(o, valeur)`. L'hôte écrit `{"genre":"gel"}` avant de
+- Produit : cinq options, chacune une fois au plus : `--couleur <#rrggbb>` (la page ne montre qu'un bloc fixe de
+  cette couleur sur toute la fenêtre ; l'hôte la passe à l'adresse de la page sans `#`, `&couleur=3366cc`, puisqu'un
+  `#` y ouvrirait le fragment, et la page la relit par `URLSearchParams` et pose le fond du bloc avant `pret`),
+  `--au-dessus` (la fenêtre toujours au-dessus), `--position <x>,<y>` (sa position extérieure, en pixels physiques,
+  négatifs admis, dans un écran du bureau : tao remplace en silence par `CW_USEDEFAULT` une position initiale hors
+  d'un écran, si bien que l'application la pose après la création par `set_outer_position`, la relit par
+  `outer_position()`, et sort en 1 sur un écart, « position non tenue : <x>,<y> » sur sa sortie d'erreur), `--taille
+  <l>,<h>` (sa zone cliente, en pixels physiques, 1 au moins), `--proprietaire <hwnd>` (un HWND en décimal, que
+  `WindowBuilderExtWindows::with_owner_window` fait propriétaire de la fenêtre, pour l'essai d'une fenêtre possédée
+  d'un autre processus) ; chacune refusée sinon par `refusee(o, valeur)`. L'hôte écrit `{"genre":"gel"}` avant de
   dormir ; la page écrit `{"genre":"fige"}` avant sa boucle de 8 s, lancée par `setTimeout(…, 0)`. La page dit
   `clic`, `double` et `droit` (`click`, `dblclick`, `contextmenu`, leur `id`), `change` (son `id`, `etat` à
   `checked`), `defile` (son `id`, `valeur` au pourcentage entier de défilement vertical) ; `#cadre` porte
@@ -1629,15 +1919,17 @@ ADR-0006.
 - [ ] **Étape 1 : les tests de `regles`, écrits** (ils portent l'attribut de l'application, `#[ignore]` : ils ne se
   voient rouges puis verts qu'en CI, lancés par la sentinelle, à la Tâche 13) :
   ```rust
-  #[test] fn options_de_fenetre_se_lisent() { /* « --couleur #3366cc --au-dessus --position -10,20 --taille 800,600 » :
-      couleur Some("#3366cc"), au_dessus vrai, position Some((-10, 20)), taille Some((800, 600)) */ }
+  #[test] fn options_de_fenetre_se_lisent() { /* « --couleur #3366cc --au-dessus --position -10,20 --taille 800,600
+      --proprietaire 65802 » : couleur Some("#3366cc"), au_dessus vrai, position Some((-10, 20)), taille Some((800,
+      600)), proprietaire Some(65802) ; l'adresse de la page porte « couleur=3366cc », sans « # » */ }
   #[test] fn options_de_fenetre_refusees() { /* --couleur 3366cc, --couleur #33gg00, --position 10, --taille 0,600,
-      --taille 800 : chacune refusée par son message ; chacune répétée : refusée */ }
+      --taille 800, --proprietaire 0, --proprietaire x : chacune refusée par son message ; chacune répétée : refusée */ }
   #[test] fn gel_ecrit_sa_ligne() { /* la ligne que l'hôte écrit avant de dormir : ligne(TITRE, "{\"genre\":\"gel\"}") */ }
   ```
 - [ ] **Étape 2 : voir compiler** : `cargo build -p appli-essai` ; `cargo test --workspace` (ces tests restent
   ignorés sur le poste, la sentinelle de la CI les lance).
-- [ ] **Étape 3 : le code** ; `Window::set_focus()` jamais appelé.
+- [ ] **Étape 3 : le code** ; `Window::set_focus()` jamais appelé ; l'adresse de la page se bâtit par une fonction de
+  `regles`, que `options_de_fenetre_se_lisent` éprouve.
 - [ ] **Étape 4 : commit** : `git add essai/appli/src/main.rs essai/appli/src/page.html`, puis
   `git commit -m "feat(essai): options de fenêtre, cibles du pointeur et signaux de gel"`.
 
@@ -1656,14 +1948,27 @@ témoin.
 - Consomme : tout ce qui précède ; `lancer_appli`, `Profil`, `pilote`, `Sortie`, `sonder`, `exiger_la_ci`, `CALME`.
 - Produit (`tests/commun/mod.rs`, chaque fonction publique commençant par `exiger_la_ci`) :
   ```rust
-  pub fn image_png(chemin: &Path) -> (u32, u32, Vec<u8>);        // RGB 8 bits, par png::Decoder ; panique sinon
+  /// RGB 8 bits, par `png::Decoder::new(BufReader::new(File::open(chemin)…))` (il exige `BufRead + Seek`) ; panique sinon.
+  pub fn image_png(chemin: &Path) -> (u32, u32, Vec<u8>);
   pub fn zone_cliente(appli: &Appli) -> (i32, i32, u32, u32);   // à l'écran
   pub fn cadre_dwm(appli: &Appli) -> (i32, i32, u32, u32);
   pub fn position_du_pointeur() -> (i32, i32);
   pub fn dpi(appli: &Appli) -> u32;
+  /// Panique « le runner n'est pas à 96 DPI : l'essai ne prouverait rien » si `dpi(appli)` ne vaut pas 96 : le
+  /// processus des essais n'est pas sensible au DPI, et ses pixels n'égalent ceux de `pilote` qu'à 96 DPI.
+  pub fn exiger_96_dpi(appli: &Appli);
   /// Le PID de la fenêtre de premier niveau sous le point d'écran (`WindowFromPoint`, puis `GA_ROOT`).
   pub fn fenetre_au_point(x: i32, y: i32) -> Option<u32>;
   pub fn bureau_virtuel() -> (i32, i32, u32, u32);
+  /// La fenêtre de premier niveau, visible et titrée, du processus de l'application, en HWND décimal.
+  pub fn fenetre_de(appli: &Appli) -> isize;
+  /// Son propriétaire (`GetWindow(GW_OWNER)`), s'il en a un.
+  pub fn proprietaire_de(appli: &Appli) -> Option<isize>;
+  /// Les HWND (`CurrentNativeWindowHandle`, en décimal) des enfants directs de `fenetre_de(appli)` dans la vue de
+  /// contrôle de l'automatisation, celle que lit `pilote` (`ElementFromHandle`, puis `ControlViewWalker`,
+  /// `GetFirstChildElement` et `GetNextSiblingElement`), lus sur un fil neuf initialisé en MTA, comme `pilote` lit
+  /// l'arbre (ADR-0005, la puce de COM) ; panique si l'automatisation ne s'ouvre pas.
+  pub fn enfants_uia(appli: &Appli) -> Vec<isize>;
   ```
 
 - [ ] **Étape 1 : les aides**, dans `tests/commun/mod.rs`.
@@ -1690,7 +1995,16 @@ témoin.
     `motdepasse`, puis `CALME` : le champ porte bien trois caractères quand on lit ; `arbre` : la ligne
     `id=motdepasse` porte `motdepasse=oui`, aucune ligne ne porte `abc`, ni `valeur=` sur cette ligne ;
     `valeur --id motdepasse` et `valeur --id motdepasse --egale abc` : (1, « valeur non rendue : champ de mot de
-    passe ») ; `trouver --id motdepasse` : `motdepasse=oui`, sans `abc`.
+    passe ») ; `trouver --id motdepasse` : `motdepasse=oui`, sans `abc` ; `focus --id motdepasse --attendre 3000`,
+    puis `focus`, en 0 : une ligne `id=motdepasse` qui porte `motdepasse=oui`, sans `abc` ni `valeur=`.
+  - `arbre_ecarte_une_fenetre_possedee_d_un_autre_processus` : l'application ; `arbre` et `trouver --id depart` en 0,
+    leurs sorties gardées ; une copie nommée `CredentialUIBroker`, lancée par l'essai (hors de l'arbre de P),
+    `--proprietaire <fenetre_de(appli)>` ; les deux témoins d'abord : `proprietaire_de(&copie)` égale
+    `fenetre_de(&appli)`, sinon panique (« la copie n'est pas possédée par l'application : l'essai ne prouverait
+    rien ») ; puis `enfants_uia(&appli)` contient `fenetre_de(&copie)`, sondé 5 s au plus, sinon panique
+    (« l'automatisation ne montre pas la copie sous l'application : l'essai ne prouverait rien ») : sans lui, une
+    copie que l'automatisation ne montrerait pas sous W laisserait l'arbre inchangé sans que `borner` ait rien écarté ;
+    puis `arbre` en 0, sa sortie égale à celle d'avant, et `trouver --id depart` en 0, une seule ligne, `rang=1`.
   - `valeur_lit_le_champ` : `--focus champ`, `taper --texte bonjour` ; l'événement de la valeur complète
     (`"valeur":"bonjour"`), puis `CALME` ; `valeur --id champ --egale bonjour --attendre 3000` en 0 ; puis `valeur
     --id champ` porte `valeur=bonjour` ; `--egale autre` : (2, « la valeur diffère de « autre » »).
@@ -1700,14 +2014,15 @@ témoin.
   - `arbre_et_capture_d_arriere_plan_laissent_le_premier_plan` : l'application puis `autre`, `activer --fenetre
     autre` ; `arbre --fenetre appli-essai` et `capture --fenetre appli-essai --sortie <profil>/arriere.png` en 0 ;
     `fenetres` donne `premier-plan=oui` à `autre`.
-  - `capture_relue` : l'application `--couleur #3366cc --position 100,100 --taille 800,600`, puis `autre`
-    `--couleur #cc6633 --au-dessus --position 100,100 --taille 800,600`, par-dessus elle ; le témoin d'abord :
+  - `capture_relue` : `exiger_96_dpi` ; l'application `--couleur #3366cc --position 100,100 --taille 800,600`, puis
+    `autre` `--couleur #cc6633 --au-dessus --position 100,100 --taille 800,600`, par-dessus elle ; le témoin d'abord :
     `fenetre_au_point` au centre de la zone cliente de l'application rend le PID d'`autre`, sinon panique
     (« autre ne couvre pas l'application : l'essai ne prouverait rien ») ; `capture --fenetre appli-essai` en 0 ;
     l'image relue par `image_png` a la largeur et la hauteur de la ligne ; son pixel au centre de la zone cliente
-    vaut (0x33, 0x66, 0xcc) à 8 près sur chaque composante, ni noir ni (0xcc, 0x66, 0x33).
-  - `capture_rogne_l_ombre` : la largeur et la hauteur de l'image égalent celles de `cadre_dwm` ; `zone-cliente=` égale
-    `zone_cliente` moins l'origine de `cadre_dwm`.
+    vaut (0x33, 0x66, 0xcc) à 8 près sur chaque composante, ni noir ni (0xcc, 0x66, 0x33). Puis une seconde capture
+    au même chemin, en 0 : le fichier, relu, a encore la taille de la ligne (l'écrasement, que le domaine ignore).
+  - `capture_rogne_l_ombre` : `exiger_96_dpi` ; la largeur et la hauteur de l'image égalent celles de `cadre_dwm` ;
+    `zone-cliente=` égale `zone_cliente` moins l'origine de `cadre_dwm`.
   - `capture_refuse_une_fenetre_reduite` : `--reduite` ; (1, « capture refusée : fenêtre réduite »), le fichier absent.
   - `arbre_d_un_hote_fige_sort_en_3` : `invoquer --type Button --nom "Geler l'hôte"` en 0 ; la ligne `"genre":"gel"`
     en 5 s au plus ; `arbre` : (3, « échec du système : la fenêtre ne répond pas ») en moins de 6 s.
@@ -1715,9 +2030,12 @@ témoin.
   - `arbre_d_une_page_figee_rend_l_arbre_d_avant` : `arbre` en 0 ; `invoquer --type Button --nom "Figer la page"` en
     0 ; la ligne `"genre":"fige"` ; `arbre` en 0 en moins de 6 s, une ligne commençant (blancs ôtés) par
     `[Button] <Départ>`.
-- [ ] **Étape 3 : la CI.** L'étape de dépôt ajoute `${{ runner.temp }}/pilote-essais/*/*.png`, avant les deux
-  exclusions, qui restent dernières, et son commentaire le nomme. `windows` passe à `timeout-minutes: 20 #
-  provisoire : remesuré à la Tâche 17 de la tranche 2`, `mutants` à `40`, même commentaire.
+- [ ] **Étape 3 : la CI.** L'étape des essais passe à `cargo test --workspace --no-fail-fast -- --include-ignored
+  --test-threads=1 --show-output`, la ligne `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }` gardée : sans lui, un
+  rouge d'un fichier d'essais empêcherait les suivants de tourner. L'étape de dépôt ajoute
+  `${{ runner.temp }}/pilote-essais/*/*.png`, avant les deux exclusions, qui restent dernières, et son commentaire le
+  nomme. `windows` passe à `timeout-minutes: 20 # provisoire : remesuré à la Tâche 17 de la tranche 2`, `mutants` à
+  `40`, même commentaire.
 - [ ] **Étape 4 : les ADR.** Les « Confirmation » d'ADR-0005 et d'ADR-0006 nomment ces essais, chacun sous la règle
   qu'il éprouve (`tests/essais_lecture.rs`).
 - [ ] **Étape 5 : vérifier sur le poste** : `cargo build -p pilote -p appli-essai`, `cargo clippy --workspace
@@ -1732,7 +2050,8 @@ témoin.
 
 ### Tâche 14 : les essais des gestes
 
-**Fichiers :** modifier `tests/commun/mod.rs`, ADR-0005, ADR-0006 ; créer `tests/essais_gestes.rs`.
+**Fichiers :** modifier `tests/commun/mod.rs`, ADR-0005, ADR-0006, et `src/domaine/pointeur.rs` seulement si
+`clic_au_bord_du_bureau_virtuel` départage contre la formule (étape 5) ; créer `tests/essais_gestes.rs`.
 
 **Interfaces :**
 - Consomme : les aides de la Tâche 13.
@@ -1743,7 +2062,8 @@ témoin.
   pub struct BoutonsInverses;  impl BoutonsInverses { pub fn poser() -> BoutonsInverses }
   ```
 
-- [ ] **Étape 1 : `tests/essais_gestes.rs`** :
+- [ ] **Étape 1 : `tests/essais_gestes.rs`**. Chaque essai du pointeur commence par `exiger_96_dpi` : ses points
+  sont des positions CSS de la page, et ses comparaisons lisent la zone cliente depuis le processus des essais.
   - `invoquer_un_bouton` : `invoquer --type Button --nom Départ` en 0, puis un événement `clic` d'id `depart`.
   - `invoquer_un_element_sans_le_geste_sort_en_3` : `invoquer --id inerte` : (3, « échec du système : l'élément
     n'offre pas le motif Invoke »).
@@ -1762,15 +2082,14 @@ témoin.
     puis un `defile` d'id `cadre`, valeur 99 au moins, et, après `CALME`, aucun `focus` d'id `cadre` ; le témoin :
     `focaliser --id cadre` en 0 donne un `focus` d'id `cadre`, si bien que le cadre pouvait le prendre ; `defiler --id
     inerte --a 50` : (3, « échec du système : l'élément n'offre pas le motif Scroll »).
-  - `clic_clique_au_point` : `--position 100,100 --taille 800,600` ; `dpi` vaut 96, sinon panique « le runner n'est
-    pas à 96 DPI : l'essai ne prouverait rien » ; `clic --x 350 --y 225` en 0 ; un `clic` d'id `cible` ;
-    `position_du_pointeur()` égale l'origine de `zone_cliente` plus (350, 225).
-  - `clic_au_bord_du_bureau_virtuel` : `dpi` vaut 96 ; l'application placée par `--position` pour que la dernière
+  - `clic_clique_au_point` : `--position 100,100 --taille 800,600` ; `clic --x 350 --y 225` en 0 ; un `clic` d'id
+    `cible` ; `position_du_pointeur()` égale l'origine de `zone_cliente` plus (350, 225).
+  - `clic_au_bord_du_bureau_virtuel` : l'application placée par `--position` pour que la dernière
     colonne du bureau virtuel (`x + l − 1` de `bureau_virtuel`) tombe dans sa zone cliente, à la hauteur des neuf
     dixièmes du bureau virtuel ; `fenetre_au_point` y rend l'application, sinon panique (« la barre des tâches ou une
     autre fenêtre couvre le point : l'essai ne prouverait rien ») ; `clic` au point de la zone cliente qui y tombe, en
     0 ; `position_du_pointeur()` égale le point visé, sur chaque axe. Il départage l'échelle de la normalisation
-    (décision 11) : un pixel avant dit l'échelle de 65 535, et la formule change avec ses tests du domaine.
+    (décision 11) : un pixel avant dit l'échelle de 65 535 (étape 5).
   - `boutons_inverses_cliquent_a_gauche` : `BoutonsInverses::poser()`, puis `GetSystemMetrics(SM_SWAPBUTTON)` non
     nul, sinon panique ; `clic --x 350 --y 225` en 0 ; un `clic` d'id `cible`, et, après `CALME`, aucun `droit` :
     Windows lit les boutons de `SendInput` comme les boutons physiques, et l'échange du domaine les remet.
@@ -1783,39 +2102,48 @@ témoin.
     <l>×<h> »), `l` et `h` lus par `zone_cliente`.
   - `molette_defile_la_roulette` : `molette --x 400 --y 350 --crans -3` en 0, puis un `defile` d'id `roulette`, valeur
     au-dessus de 0 ; `--crans 3` : un `defile` d'id `roulette`, valeur 0.
-- [ ] **Étape 2 : les ADR.** Les « Confirmation » nomment ces essais ; si `clic_au_bord_du_bureau_virtuel` a départagé
-  l'échelle, ADR-0005 dit celle qui est mesurée.
+- [ ] **Étape 2 : les ADR.** Les « Confirmation » nomment ces essais.
 - [ ] **Étape 3 : vérifier sur le poste**, comme à la Tâche 13.
 - [ ] **Étape 4 : commit et envoi** : `git add tests/commun/mod.rs tests/essais_gestes.rs docs/decisions/0005-garde-fous-fenetre-retenue-et-premier-plan.md docs/decisions/0006-interface-sortie-codes-journal-et-bornes.md`,
   puis `git commit -m "test(essais): les gestes de l'automatisation et du pointeur de bout en bout"`, puis
   `git push origin feat/tranche2`.
-- [ ] **Étape 5 : lire la CI**, comme à la Tâche 13. Si `clic_au_bord_du_bureau_virtuel` voit le pointeur un pixel
-  avant le point visé, la formule de la décision 11 passe à l'échelle de 65 535 dans `src/domaine/pointeur.rs`, avec
-  les valeurs attendues de `normalisation_vise_le_quart_du_pixel` et de `clic_envoie_un_seul_lot`, la mutation du
-  module relancée, et le correctif se relit.
+- [ ] **Étape 5 : lire la CI**, comme à la Tâche 13, puis l'échelle. Si `clic_au_bord_du_bureau_virtuel` voit le
+  pointeur un pixel avant le point visé, la formule de la décision 11 passe à l'échelle de 65 535 dans
+  `src/domaine/pointeur.rs`, toujours en `i64`, avec les valeurs attendues de `normalisation_vise_le_quart_du_pixel`
+  (celles du bureau de 16 384 px recalculées) et de `clic_envoie_un_seul_lot`, et la mutation du module relancée.
+  Dans les deux cas, ADR-0005, « Les gestes et l'ordre des gardes », dit l'échelle que l'essai a mesurée (le quart de
+  pixel à 65 536, ou 65 535) et nomme l'essai. Commit : `git add docs/decisions/0005-garde-fous-fenetre-retenue-et-premier-plan.md`
+  (et `src/domaine/pointeur.rs`, `.cargo/mutants.toml` s'ils changent), puis `git commit -m "docs(adr): l'échelle du
+  pointeur mesurée au bord du bureau virtuel"`, l'envoi, et le correctif se relit.
 
 ### Tâche 15 : KeePassXC, SystemSettings, les Paramètres et ArrowDown
 
 **Fichiers :** modifier `tests/commun/mod.rs` (`Parametres::regle`), `tests/essais_gardes.rs`,
-`tests/essais_clavier.rs`, ADR-0005, `docs/registre.md`.
+`tests/essais_clavier.rs`, ADR-0005.
 
 **Interfaces :**
 - Produit (`tests/commun/mod.rs`) :
   ```rust
   impl Parametres { /// « enfant SystemSettings », « AUMID des Paramètres », « ni enfant ni AUMID lisibles », ou
-      /// « AUMID d'une autre application », lus maintenant, l'AUMID en STA comme `pilote` le lit (décision 2).
+      /// « AUMID d'une autre application », lus maintenant, l'AUMID en STA comme `pilote` le lit (ADR-0005, la puce
+      /// de COM).
       pub fn regle(&self) -> &'static str }
   ```
 
-- [ ] **Étape 1 : `tests/essais_gardes.rs`.** `copie_keepassxc_refuse_taper_et_touche` et la constante `KEEPASSXC`
-  cèdent à `copie_keepassxc_garde_son_champ` : la copie `KeePassXC --focus motdepasse` ; `capture --fenetre
-  KeePassXC --sortie <profil>/k.png` : (1, « capture refusée : fenêtre de KeePassXC »), le fichier absent ; `taper
-  --fenetre KeePassXC --texte x` : (1, « KeePassXC : focus dans un champ de mot de passe ; 0 unités sur 1 sont
-  parties ») ; `touche Ctrl+A` : (1, « KeePassXC : seules les touches de déplacement passent … ; 0 unités sur 1 sont
-  parties ») ; `touche Gauche` en 0, avec son `touche` d'id `motdepasse` ; après `CALME`, aucune `saisie` d'id
-  `motdepasse`. Puis `--focus zone` : `taper --texte "a\tsecret"` : (1, « KeePassXC : un texte qui porte une
-  tabulation ou un saut de ligne est refusé »), aucune frappe ; `touche Tab` en 0 ; un `focus` d'id `motdepasse` ;
-  `taper --texte s` : le refus du champ. Puis `--focus champ` : `taper --texte ab` en 0, `ab` saisi dans `champ`.
+- [ ] **Étape 1 : `tests/essais_gardes.rs`.** La Tâche 8 a retiré `copie_keepassxc_refuse_taper_et_touche` et la
+  constante `KEEPASSXC` ; leur successeur, `copie_keepassxc_garde_son_champ`. Chaque lancement de la copie prouve
+  d'abord que le focus de l'automatisation est dans le champ voulu, avant tout `taper` ou `touche` : `activer
+  --fenetre KeePassXC` en 0, puis `focus --fenetre KeePassXC --id <champ> --attendre 3000` en 0 (le témoin : sans
+  lui, une frappe lancée pendant que le focus est encore sur la fenêtre hôte serait refusée « focus illisible »).
+  La copie `KeePassXC --focus motdepasse` ; `capture --fenetre KeePassXC --sortie <profil>/k.png` : (1, « capture
+  refusée : fenêtre de KeePassXC »), le fichier absent ; le témoin, `--id motdepasse` ; `taper --fenetre KeePassXC
+  --texte x` : (1, « KeePassXC : focus dans un champ de mot de passe ; 0 unités sur 1 sont parties ») ; `touche
+  Ctrl+A` : (1, « KeePassXC : seules les touches de déplacement passent … ; 0 unités sur 1 sont parties ») ; `touche
+  Gauche` en 0, avec son `touche` d'id `motdepasse` ; après `CALME`, aucune `saisie` d'id `motdepasse`. Puis
+  `--focus zone` : `taper --texte "a\tsecret"` : (1, « KeePassXC : un texte qui porte une tabulation ou un saut de
+  ligne est refusé »), aucune frappe ; le témoin, `--id zone` ; `touche Tab` en 0 ; un `focus` d'id `motdepasse` ;
+  `taper --texte s` : le refus du champ. Puis `--focus champ` : le témoin, `--id champ` ; `taper --texte ab` en 0,
+  `ab` saisi dans `champ`.
   `copie_systemsettings_refusee` gagne `arbre --fenetre SystemSettings` et `capture --fenetre SystemSettings
   --sortie …` : (1, « fenêtre refusée : processus SystemSettings »), le fichier absent.
   `parametres_reduits_restent_refuses` écrit `Parametres::regle` sur la sortie d'erreur, lue juste avant `activer`,
@@ -1843,11 +2171,15 @@ témoin.
   /// pas) : l'attribut du `TOKEN_MANDATORY_LABEL` que reçoit `SetTokenInformation(TokenIntegrityLevel)`.
   const SE_GROUP_INTEGRITY: u32 = 0x20;
   pub enum Jeton { Restreint, Abaisse }
-  /// `pilote` lancé par CreateProcessAsUserW sous un jeton tiré de celui des essais (décision 16) ; le profil
-  /// marqué au niveau moyen ; ses sorties dans `restreint-sortie.txt` et `restreint-erreur.txt` du profil ; 30 s au plus.
+  /// `pilote` lancé par CreateProcessAsUserW sous un jeton tiré de celui des essais (ADR-0005, « Le niveau
+  /// d'intégrité se juge par comparaison ») ; le profil marqué au niveau moyen ; ses sorties dans
+  /// `restreint-sortie.txt` et `restreint-erreur.txt` du profil ; 30 s au plus.
   pub fn pilote_restreint(profil: &Profil, args: &[&str], jeton: Jeton) -> Sortie;
   pub fn niveau_du_processus(pid: u32) -> u32;   pub fn niveau_des_essais() -> u32;   // paniquent s'ils ne se lisent pas
   ```
+  Le SID du niveau moyen se fait par `CreateWellKnownSid(WinMediumLabelSid, …)`, celui des Administrateurs par
+  `WinBuiltinAdministratorsSid`, sous la seule `Win32_Security` : jamais `ConvertStringSidToSidW`, qui demande
+  `Win32_Security_Authorization`, une feature que le dépôt ne prend pas.
   Avant de lancer, `pilote_restreint` vérifie : `niveau_des_essais() == 0x3000` (sinon panique « le runner n'est pas
   élevé : l'essai ne prouverait rien ») ; le jeton fait au niveau 0x2000 ; pour `Restreint`, le groupe Administrateurs
   inactif (`CheckTokenMembership` sur un jeton d'emprunt tiré du jeton fait).
@@ -1880,16 +2212,23 @@ témoin.
 **Fichiers :** modifier `.github/workflows/ci.yml`, `docs/decisions/0005-…`, `docs/decisions/0006-…`,
 `docs/registre.md`, `CLAUDE.md`.
 
-- [ ] **Étape 1 : les délais.** Sur la tête, CI verte, lire les passages à froid de `windows` et de `mutants`
-  (`gh run view <id> --json jobs`) ; chaque délai devient deux fois le plus long, en minutes entières par excès, avec
-  son commentaire (« deux fois N min M s, le passage à froid du <date> ») ; celui de `mutants` n'est jamais sous
-  23 min (deux fois 11 min 12 s, le passage du 22/11/2026). `mutants-complet.yml` n'est pas touché (décision 17).
+- [ ] **Étape 1 : les délais.** Un passage à froid de la tête d'abord : rust-cache restaure par une clé partielle,
+  et un run de PR lit aussi les caches de la branche principale, si bien que le run de la tête, après les envois des
+  Tâches 13 à 16, est chaud. `gh cache list`, puis `gh cache delete --all`, suppriment tous les caches du dépôt ;
+  puis `git commit --allow-empty -m "ci: un passage à froid pour mesurer les délais"` et l'envoi ; le journal de
+  l'étape du cache de `windows` et de `mutants` doit dire « No cache found », sinon le run n'est pas froid et se
+  refait. Sur ce run, CI verte, lire les durées de `windows` et de `mutants` (`gh run view <id> --json jobs`) ;
+  chaque délai devient deux fois la plus longue, en minutes entières par excès, avec son commentaire (« deux fois
+  N min M s, le passage à froid du <date>, run <id> ») ; celui de `mutants` n'est jamais sous 23 min (deux fois
+  11 min 12 s, le passage du 22/11/2026). `mutants-complet.yml` n'est pas touché (décision 17).
 - [ ] **Étape 2 : les ADR relus.** Chaque ligne de la section « Ce que ce plan précise ou change du plan maître et des
   ADR » se retrouve, au présent, dans le corps d'ADR-0005 ou d'ADR-0006, et dans leur sous-section de la tranche 2 ;
   chaque test de « Confirmation » existe à son chemin ; aucun texte hors des plans ne dit encore « d'ici la tranche
   2 », « aux tranches suivantes » pour ce que la tranche livre, « pas encore livrée : focus », « valeur refusée :
   champ de mot de passe », ni le message de KeePassXC de la tranche 1 : `git grep -n -i '<mot>' -- . ':!.claude/plans'`
-  pour chacun, les plans citant ces textes jusqu'à la clôture du lot, qui les supprime.
+  pour chacun, les plans citant ces textes jusqu'à la clôture du lot, qui les supprime. Aucun renvoi à une décision
+  d'un plan ne reste dans le code : `git grep -n "décision [0-9]" -- src tests essai` ne rend rien (Tâche 1, étape 6), et
+  `git grep -n -i "decision_[0-9]" -- src tests essai` ne rend rien.
 - [ ] **Étape 3 : le registre.** LE-1 : état « clos », `touche_bas_donne_arrowdown` vert dans `windows` ; une leçon de la
   tranche qui dépasse son code, par `/consigner`.
 - [ ] **Étape 4 : `CLAUDE.md`.** L'état : « Tranche 2 du lot 1 faite : la lecture, les gestes et la capture. Prochaine :
